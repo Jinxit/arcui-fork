@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "agents": {
+      "type": "streamable-http",
+      "url": "http://192.168.0.106:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer agents_AOdy4GVPBocGGYzItVBnGwNTgPgDdYTG2HLX7pH8qM4"
+      }
+    }
+  }
+}
