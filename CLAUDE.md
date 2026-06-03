@@ -63,6 +63,26 @@ This is NOT an original project. The upstream addon is actively developed by som
 - **Minimal surface area.** The fewer lines you change in upstream files, the fewer conflicts you'll face. One surgical edit beats a refactor.
 - **Document every upstream file modification.** If you must edit an upstream file, add a `-- [FORK] reason` comment at the change site so the merge agent (and future humans) can tell what's ours vs what's upstream.
 
+## WoW API Constraints
+
+### Taint
+The WoW UI uses a **taint** system. Blizzard ("secure") code can do privileged things (cast spells, target units, use protected frames). The moment addon ("insecure") code touches a secure variable, function, or frame, it becomes **tainted** and those privileged operations break — often silently, sometimes with "action blocked" errors. This applies transitively: if your code writes to a table that secure code later reads, the entire chain taints.
+
+- Never overwrite or hook Blizzard global functions that are called from secure code paths. Use `hooksecurefunc()` which runs your code *after* the original without tainting it.
+- Never modify secure frames (action buttons, unit frames) from insecure code during combat. Use `RegisterAttributeDriver` / `SecureHandlerWrapScript` for combat-time frame changes.
+- Be especially careful with the Cooldown Manager integration (`CDM_Module/`). CDM icons are action buttons — they are secure frames. Styling, positioning, and text overlays are fine, but never call `:SetAttribute()` on them from insecure code during combat.
+- If something works out of combat but breaks in combat with "action blocked by an addon," taint is the cause.
+
+### 12.0.0 (Midnight) Addon Restrictions
+The Midnight expansion (Interface 120000+) added significant combat restrictions for addons:
+
+- **Cooldown API changes** — `GetSpellCooldown` and related APIs behave differently. The addon already adapted in v3.6.2e+, but be aware when writing new cooldown-related code.
+- **Protected cooldown info** — some cooldown data is now restricted during combat. Code that queries cooldowns must handle `nil` returns gracefully during combat lockdown.
+- **Secret auras** — certain buffs/debuffs are now flagged as "secret" and are hidden from addon API queries (`UnitAura`, `AuraUtil`). Code that tracks auras must handle missing data for secret auras without erroring or showing stale state. Don't assume every active buff/debuff will appear in the aura scan.
+- **Frame restrictions** — additional frames are now protected during combat. Test any frame manipulation code in combat, not just out of combat.
+
+When writing custom features, always test in combat. A feature that works at a target dummy but breaks in a dungeon is worse than no feature.
+
 ## Rules
 
 - Never push directly to `main` — always use branches and PRs.
