@@ -53,6 +53,16 @@ Current version is read from `## Version:` in `ArcUI.toc`. If the Wago API fails
 - **Lua syntax check** — `luac -p` on all `.lua` files for PRs to `main`
 - **Release workflow** — on merge to `main`, zips addon files and creates a GitHub Release for WowUp
 
+## This Is a Fork
+
+This is NOT an original project. The upstream addon is actively developed by someone else and we regularly merge their releases. Every custom change you make will need to survive the next upstream merge. Write code accordingly:
+
+- **Never modify upstream files in-place if you can avoid it.** Prefer hooks, wrappers, and post-load overrides that layer on top of existing code rather than editing it directly. If upstream rewrites the function you edited, you get a conflict. If you hooked it from a separate block, the hook still works or fails cleanly.
+- **Isolate custom code.** When possible, put custom functionality in clearly marked blocks (`-- [FORK]` comment prefix) or in separate files that are appended to the TOC after upstream files. A new file never conflicts with upstream.
+- **Don't reorganize, rename, or reformat upstream code.** Cosmetic changes create diff noise that turns every future merge into a nightmare. Touch only what you need to touch.
+- **Minimal surface area.** The fewer lines you change in upstream files, the fewer conflicts you'll face. One surgical edit beats a refactor.
+- **Document every upstream file modification.** If you must edit an upstream file, add a `-- [FORK] reason` comment at the change site so the merge agent (and future humans) can tell what's ours vs what's upstream.
+
 ## Rules
 
 - Never push directly to `main` — always use branches and PRs.
