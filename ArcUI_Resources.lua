@@ -5599,6 +5599,10 @@ function ns.Resources.UpdateBar(barNumber)
       local pct = (maxValue and maxValue > 0) and (secretValue / maxValue * 100) or 0
       local pctFmt = (cfg.display.textShowPercentSymbol ~= false) and "%.0f%%" or "%.0f"
       textFrame.text:SetFormattedText(pctFmt, pct)
+    elseif textFormat == "percent" and cfg.tracking.secondaryType == "health" then  -- [FORK] Health resource bar
+      local pct = (maxValue and maxValue > 0) and (secretValue / maxValue * 100) or 0
+      local pctFmt = (cfg.display.textShowPercentSymbol ~= false) and "%.0f%%" or "%.0f"
+      textFrame.text:SetFormattedText(pctFmt, pct)
     elseif displayFormat == "decimal" then
       -- Format as decimal (e.g., Soul Shards for Destruction)
       textFrame.text:SetFormattedText("%.1f", displayValue)
@@ -5906,6 +5910,10 @@ local function UpdateBarValue(barNumber)
       else
         textFrame.text:SetText(secretValue)
       end
+    elseif textFormat == "percent" and cfg.tracking.secondaryType == "health" then  -- [FORK] Health resource bar
+      local pct = (maxValue and maxValue > 0) and (secretValue / maxValue * 100) or 0
+      local pctFmt = (cfg.display.textShowPercentSymbol ~= false) and "%.0f%%" or "%.0f"
+      textFrame.text:SetFormattedText(pctFmt, pct)
     elseif displayFormat == "decimal" then
       textFrame.text:SetFormattedText("%.1f", displayValue)
     elseif textFormat == "abbreviated" then
