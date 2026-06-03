@@ -10,54 +10,19 @@
 --   maskStyle     string  "none" | "blizzard-classic" | "blizzard-classic-thin"
 --   borderType    string  "drawn" (default) | "texture"
 --   borderTexture string  LSM border name (used when borderType = "texture")
---
--- Mask texture files must be placed at:
---   Interface\AddOns\ArcUI\Textures\Masks\blizzard-classic-mask.png
---   Interface\AddOns\ArcUI\Textures\Masks\blizzard-classic-thin-mask.png
--- Source them from SenseiClassResourceBar (MIT licensed).
--- Without the files the mask styles fall back to rectangular (no error).
 -- ===================================================================
 
 local ADDON, ns = ...
 
 local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
 
--- Mask texture paths (WoW Interface-relative)
+-- Mask texture paths (WoW Interface-relative). TGA files ship in the
+-- addon under Textures/Masks/ so every dropdown choice has a backing
+-- file at install time.
 local MASK_STYLES = {
-  ["blizzard-classic"]      = [[Interface\AddOns\ArcUI\Textures\Masks\blizzard-classic-mask.png]],
-  ["blizzard-classic-thin"] = [[Interface\AddOns\ArcUI\Textures\Masks\blizzard-classic-thin-mask.png]],
+  ["blizzard-classic"]      = [[Interface\AddOns\ArcUI\Textures\Masks\blizzard-classic-mask.tga]],
+  ["blizzard-classic-thin"] = [[Interface\AddOns\ArcUI\Textures\Masks\blizzard-classic-thin-mask.tga]],
 }
-
--- ===================================================================
--- TRACK SELECTED BAR FOR OPTIONS INJECTION
--- Wraps ns.AppearanceOptions.SetSelectedBar to capture the currently
--- selected bar type/number, needed by our injected option closures.
--- ===================================================================
-local _selectedBarType, _selectedBarNum
-
-do
-  local orig = ns.AppearanceOptions and ns.AppearanceOptions.SetSelectedBar
-  if orig then
-    ns.AppearanceOptions.SetSelectedBar = function(barType, barNum, ...)
-      _selectedBarType = barType
-      _selectedBarNum  = barNum
-      return orig(barType, barNum, ...)
-    end
-  end
-end
-
-local function ForkGetSelectedConfig()
-  if _selectedBarType == "resource" and _selectedBarNum then
-    return ns.API.GetResourceBarConfig(_selectedBarNum)
-  end
-  return nil
-end
-
-local function ForkRefreshBar()
-  if _selectedBarType == "resource" and _selectedBarNum then
-    ns.Resources.ApplyAppearance(_selectedBarNum)
-  end
-end
 
 -- ===================================================================
 -- APPLYAPPEARANCE HOOK
@@ -115,8 +80,9 @@ hooksecurefunc(ns.Resources, "ApplyAppearance", function(barNumber)
       mainFrame.predCostTex:AddMaskTexture(mask)
     end
   else
-    -- "none" or unrecognised style: remove any existing fork mask so
-    -- the bar returns to its native rectangular appearance.
+    -- "none", unrecognised style, or the chosen mask file failed to
+    -- load: remove any existing fork mask so the bar returns to its
+    -- native rectangular appearance.
     if mainFrame._forkMask then
       local mask = mainFrame._forkMask
       for i = 1, 5 do
@@ -186,6 +152,12 @@ end)
 -- OPTIONS INJECTION
 -- Wraps ns.AppearanceOptions.GetOptionsTable to add mask/border
 -- controls into the existing FRAME BORDER section (orders 51.5-51.7).
+--
+-- Selection state is derived from the existing barSelector.get(), which
+-- is the same source the rest of the Appearance panel uses. We do not
+-- track it ourselves — the previous SetSelectedBar wrapper missed the
+-- dropdown's auto-pick and direct-set paths, leaving the fork controls
+-- targeting nil or a stale right-click selection.
 -- ===================================================================
 do
   local origGetOptionsTable = ns.AppearanceOptions and ns.AppearanceOptions.GetOptionsTable
@@ -193,6 +165,37 @@ do
     ns.AppearanceOptions.GetOptionsTable = function(...)
       local opts = origGetOptionsTable(...)
       if not (opts and opts.args) then return opts end
+
+      -- Read the selected bar key the same way the AppearanceOptions
+      -- module does. barSelector.get() is the canonical source and
+      -- honours both the dropdown's set handler and its auto-pick
+      -- fallback when selectedAppearanceBar is nil.
+      local function GetSelectedKey()
+        local sel = opts.args.barSelector
+        if not (sel and sel.get) then return nil end
+        return sel.get()
+      end
+
+      -- Returns the resource bar config the user is currently editing,
+      -- or nil if the selection isn't a resource bar.
+      local function ForkGetSelectedConfig()
+        local key = GetSelectedKey()
+        if not key then return nil end
+        local barType, barNum = key:match("^(%w+)_(%d+)$")
+        if barType == "resource" and barNum then
+          return ns.API.GetResourceBarConfig(tonumber(barNum))
+        end
+        return nil
+      end
+
+      local function ForkRefreshSelectedBar()
+        local key = GetSelectedKey()
+        if not key then return end
+        local barType, barNum = key:match("^(%w+)_(%d+)$")
+        if barType == "resource" and barNum then
+          ns.Resources.ApplyAppearance(tonumber(barNum))
+        end
+      end
 
       -- Returns true when the border section is expanded (not collapsed).
       -- Reads the CollapsibleHeader toggle's get() directly so we avoid
@@ -222,7 +225,7 @@ do
           local cfg = ForkGetSelectedConfig()
           if cfg then
             cfg.display.maskStyle = value
-            ForkRefreshBar()
+            ForkRefreshSelectedBar()
           end
         end,
         order   = 51.5,
@@ -250,7 +253,7 @@ do
           local cfg = ForkGetSelectedConfig()
           if cfg then
             cfg.display.borderType = value
-            ForkRefreshBar()
+            ForkRefreshSelectedBar()
           end
         end,
         order   = 51.6,
@@ -278,7 +281,7 @@ do
           local cfg = ForkGetSelectedConfig()
           if cfg then
             cfg.display.borderTexture = value
-            ForkRefreshBar()
+            ForkRefreshSelectedBar()
           end
         end,
         order   = 51.7,
