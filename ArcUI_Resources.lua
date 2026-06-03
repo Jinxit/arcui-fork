@@ -496,6 +496,7 @@ ns.Resources.SecondaryTypes = {
   { id = "essence",       name = "Essence",        powerType = Enum.PowerType.Essence,       color = {r=0, g=0.8, b=0.8}, maxDefault = 5 },
   { id = "arcaneCharges", name = "Arcane Charges", powerType = Enum.PowerType.ArcaneCharges, color = {r=0.1, g=0.1, b=0.98}, maxDefault = 4 },
   { id = "stagger",       name = "Stagger",        powerType = nil,                          color = {r=0.52, g=1, b=0.52}, maxDefault = 100 },  -- Special: uses UnitStagger
+  { id = "health",        name = "Health",         powerType = nil,                          color = {r=0, g=0.8, b=0},     maxDefault = 100 }, -- [FORK] Health resource bar
   { id = "soulFragments", name = "Soul Fragments", powerType = nil,                          color = {r=0.34, g=0.06, b=0.46}, maxDefault = 6 },   -- Special: DH Vengeance (C_Spell.GetSpellCastCount)
   { id = "soulFragmentsDevourer", name = "Soul Fragments (Devourer)", powerType = nil,     color = {r=0.28, g=0.13, b=0.80}, maxDefault = 50 },  -- Special: DH Devourer hero spec (aura-based)
   { id = "maelstromWeapon", name = "Maelstrom Weapon", powerType = nil,                     color = {r=0.0, g=0.5, b=1.0}, maxDefault = 10 },  -- Special: Enhancement Shaman (aura 344179)
@@ -580,6 +581,8 @@ function ns.Resources.GetSecondaryMaxValue(secondaryType)
   -- Special cases with known fixed max values
   if secondaryType == "stagger" then
     return UnitHealthMax("player") or 100
+  elseif secondaryType == "health" then
+    return UnitHealthMax("player") or 100  -- [FORK] Health resource bar
   elseif secondaryType == "soulFragments" then
     return 6
   elseif secondaryType == "soulFragmentsDevourer" then
@@ -615,6 +618,12 @@ function ns.Resources.GetSecondaryResourceValue(secondaryType)
   -- STAGGER (Brewmaster Monk)
   -- Uses UnitStagger, max is player's max health
   -- ═══════════════════════════════════════════════════════════════
+  if secondaryType == "health" then
+    local current = UnitHealth("player") or 0
+    local max = UnitHealthMax("player") or 1
+    return max, current, current, "number"  -- [FORK] Health resource bar
+  end
+
   if secondaryType == "stagger" then
     local stagger = UnitStagger("player") or 0
     local maxHealth = UnitHealthMax("player") or 1
@@ -5590,6 +5599,10 @@ function ns.Resources.UpdateBar(barNumber)
       local pct = (maxValue and maxValue > 0) and (secretValue / maxValue * 100) or 0
       local pctFmt = (cfg.display.textShowPercentSymbol ~= false) and "%.0f%%" or "%.0f"
       textFrame.text:SetFormattedText(pctFmt, pct)
+    elseif textFormat == "percent" and cfg.tracking.secondaryType == "health" then  -- [FORK] Health resource bar
+      local pct = (maxValue and maxValue > 0) and (secretValue / maxValue * 100) or 0
+      local pctFmt = (cfg.display.textShowPercentSymbol ~= false) and "%.0f%%" or "%.0f"
+      textFrame.text:SetFormattedText(pctFmt, pct)
     elseif displayFormat == "decimal" then
       -- Format as decimal (e.g., Soul Shards for Destruction)
       textFrame.text:SetFormattedText("%.1f", displayValue)
@@ -5897,6 +5910,10 @@ local function UpdateBarValue(barNumber)
       else
         textFrame.text:SetText(secretValue)
       end
+    elseif textFormat == "percent" and cfg.tracking.secondaryType == "health" then  -- [FORK] Health resource bar
+      local pct = (maxValue and maxValue > 0) and (secretValue / maxValue * 100) or 0
+      local pctFmt = (cfg.display.textShowPercentSymbol ~= false) and "%.0f%%" or "%.0f"
+      textFrame.text:SetFormattedText(pctFmt, pct)
     elseif displayFormat == "decimal" then
       textFrame.text:SetFormattedText("%.1f", displayValue)
     elseif textFormat == "abbreviated" then
@@ -6925,10 +6942,12 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
   elseif event == "UNIT_HEALTH" and arg1 == "player" then
     -- Stagger is based on health percentage
     UpdateBarsForSecondaryType("stagger")
+    UpdateBarsForSecondaryType("health")  -- [FORK] Health resource bar
     
   elseif event == "UNIT_MAXHEALTH" and arg1 == "player" then
     -- Stagger max changes with max health
     UpdateBarsForSecondaryType("stagger")
+    UpdateBarsForSecondaryType("health")  -- [FORK] Health resource bar
     
   elseif event == "UNIT_AURA" and arg1 == "player" then
     -- Early-out: skip entirely if no aura-based resource bars are active
