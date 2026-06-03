@@ -2296,6 +2296,7 @@ function ns.TrackingOptions.GetResourceSetupTable()
       soulShards = 136163,             -- Soul Shards
       arcaneCharges = 135932,          -- Arcane Charges
       stagger = 611419,                -- Stagger (Monk keg icon)
+      health = 136168,               -- [FORK] Health resource bar
       soulFragments = 1355117,         -- Soul Fragments (DH Vengeance)
       soulFragmentsDevourer = 1355117, -- Soul Fragments (Devourer hero spec)
       maelstromWeapon = 237584,        -- Maelstrom Weapon (Enhancement)
@@ -2318,6 +2319,7 @@ function ns.TrackingOptions.GetResourceSetupTable()
     { id = "essence",              name = "Essence",                   classes = {"EVOKER"} },
     { id = "arcaneCharges",        name = "Arcane Charges",            classes = {}, specs = {[62]=true} },   -- Arcane Mage
     { id = "stagger",              name = "Stagger",                   classes = {}, specs = {[268]=true} },  -- Brewmaster
+    { id = "health",               name = "Health",                    classes = {"WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "DEATHKNIGHT", "SHAMAN", "MAGE", "WARLOCK", "MONK", "DRUID", "DEMONHUNTER", "EVOKER"} },  -- [FORK] Health resource bar
     { id = "soulFragments",        name = "Soul Fragments",            classes = {}, specs = {[581]=true} },  -- Vengeance DH
     { id = "soulFragmentsDevourer", name = "Soul Fragments (Devourer)", classes = {}, specs = {[1480]=true} },  -- Devourer DH hero spec
     { id = "maelstromWeapon",      name = "Maelstrom Weapon",          classes = {}, specs = {[263]=true} },  -- Enhancement Shaman
@@ -3098,6 +3100,7 @@ function ns.TrackingOptions.GetResourceSetupTable()
       secSoulFragmentsDevourer = CreateSecondaryIconEntry("soulFragmentsDevourer", "Soul Fragments (Devourer)", 5.81),
       secMaelstromWeapon = CreateSecondaryIconEntry("maelstromWeapon", "Maelstrom Weapon", 5.82),
       secMana = CreateSecondaryIconEntry("mana", "Mana (Secondary)", 5.83),
+      secHealth = CreateSecondaryIconEntry("health", "Health", 5.84),  -- [FORK] Health resource bar
       
       noSecondaryTypes = {
         type = "description",
