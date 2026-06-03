@@ -123,3 +123,6 @@ CDM_Module\CDM_Groups\ArcUI_CDMGroupsOptions.lua
 CDM_Module\CDM_Enhance\ArcUI_CDMEnhanceOptions.lua
 CDM_Module\CDM_Enhance\ArcUI_CustomLabelOptions.lua
 CDM_Module\CDM_Enhance\ArcUI_SpellUsabilityOptions.lua
+
+# [FORK] Bar styling - mask textures and texture borders
+ArcUI_ForkStyling.lua
