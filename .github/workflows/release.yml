@@ -1,0 +1,49 @@
+name: Create Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from TOC
+        id: version
+        run: |
+          version=$(grep -oP '## Version:\s*\K.*' ArcUI.toc | tr -d '[:space:]')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check if release already exists
+        id: check
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" &>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package addon
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          mkdir -p /tmp/release/ArcUI
+          rsync -a --exclude='.git' --exclude='.github' --exclude='docs' --exclude='.mcp.json' --exclude='.gitignore' . /tmp/release/ArcUI/
+          cd /tmp/release
+          zip -r /tmp/ArcUI-${{ steps.version.outputs.version }}.zip ArcUI/
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            /tmp/ArcUI-${{ steps.version.outputs.version }}.zip \
+            --title "ArcUI ${{ steps.version.outputs.version }}" \
+            --notes "Automated release of ArcUI fork v${{ steps.version.outputs.version }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
