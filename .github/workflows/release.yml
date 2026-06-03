@@ -12,17 +12,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract version from TOC
+      - name: Compose fork version
         id: version
         run: |
-          version=$(grep -oP '## Version:\s*\K.*' ArcUI.toc | tr -d '[:space:]')
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          base=$(grep -oP '## Version:\s*\K\S+' ArcUI.toc)
+          hash=$(git rev-parse --short=7 HEAD)
+          full="${base}.${hash}"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "tag=v$full" >> "$GITHUB_OUTPUT"
 
-      - name: Check if release already exists
+      - name: Skip if this commit was already released
         id: check
         run: |
-          if gh release view "v${{ steps.version.outputs.version }}" &>/dev/null; then
+          if gh release view "${{ steps.version.outputs.tag }}" &>/dev/null; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -34,16 +37,19 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: |
           mkdir -p /tmp/release/ArcUI
-          rsync -a --exclude='.git' --exclude='.github' --exclude='docs' --exclude='.mcp.json' --exclude='.gitignore' . /tmp/release/ArcUI/
+          rsync -a --exclude='.git' --exclude='.github' --exclude='docs' \
+                --exclude='.mcp.json' --exclude='.gitignore' . /tmp/release/ArcUI/
+          # Stamp the full fork version into the packaged TOC only (repo TOC stays at upstream base)
+          sed -i "s|^## Version:.*|## Version: ${{ steps.version.outputs.full }}|" /tmp/release/ArcUI/ArcUI.toc
           cd /tmp/release
-          zip -r /tmp/ArcUI-${{ steps.version.outputs.version }}.zip ArcUI/
+          zip -r "/tmp/${{ steps.version.outputs.full }}.zip" ArcUI/
 
       - name: Create GitHub Release
         if: steps.check.outputs.exists == 'false'
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
-            /tmp/ArcUI-${{ steps.version.outputs.version }}.zip \
-            --title "ArcUI ${{ steps.version.outputs.version }}" \
-            --notes "Automated release of ArcUI fork v${{ steps.version.outputs.version }}"
+            "/tmp/${{ steps.version.outputs.full }}.zip" \
+            --title "ArcUI ${{ steps.version.outputs.full }}" \
+            --notes "Automated fork release ${{ steps.version.outputs.full }} (base ${{ steps.version.outputs.base }}, commit ${{ github.sha }})"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
