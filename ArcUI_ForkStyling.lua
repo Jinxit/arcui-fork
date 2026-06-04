@@ -589,8 +589,8 @@ hooksecurefunc(ns.Resources, "ApplyAppearance", function(barNumber)
       -- Position the backdrop frame relative to mainFrame, honouring inset.
       -- Positive inset shrinks the border inward; negative extends it outward.
       bd:ClearAllPoints()
-      bd:SetPoint("TOPLEFT",     mainFrame, "TOPLEFT",     -inset,  inset)
-      bd:SetPoint("BOTTOMRIGHT", mainFrame, "BOTTOMRIGHT",  inset, -inset)
+      bd:SetPoint("TOPLEFT",     mainFrame, "TOPLEFT",      inset, -inset)
+      bd:SetPoint("BOTTOMRIGHT", mainFrame, "BOTTOMRIGHT", -inset,  inset)
 
       bd:SetBackdrop({
         edgeFile = texPath,
