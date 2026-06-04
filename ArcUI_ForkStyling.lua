@@ -11,6 +11,7 @@
 --   borderType     string  "drawn" (default) | "texture"
 --   borderTexture  string  LSM border name (used when borderType = "texture")
 --   borderEdgeSize number  8-slice corner/edge thickness in px (default 12)
+--   borderInset    number  8-slice border frame inset in px (default 0, range -20..20)
 -- ===================================================================
 
 local ADDON, ns = ...
@@ -40,6 +41,265 @@ local SENSEI_FULLFRAME_BORDERS = {
   ["SCRB Border Blizzard Classic"]      = true,
   ["SCRB Border Blizzard Classic Thin"] = true,
 }
+
+-- ===================================================================
+-- BORDER TEXTURE HOVER PREVIEW STATE
+-- Written by the options injection so the preview widget can call
+-- ForkGetSelectedConfig / ForkRefreshSelectedBar without capturing
+-- them directly (they are closures defined inside GetOptionsTable).
+-- ===================================================================
+local ForkBorderPreview = {
+  active     = false,
+  saved      = nil,    -- borderTexture saved when the dropdown opens
+  currentCfg = nil,    -- cfg ref captured at open time
+  getCfgFn   = nil,    -- set by options injection
+  refreshFn  = nil,    -- set by options injection
+}
+
+-- ===================================================================
+-- CUSTOM BORDER TEXTURE PREVIEW WIDGET
+-- "ArcUI-LSM30-Border-Preview" is a copy of the LSM30_Border widget
+-- (AceGUI-3.0-SharedMediaWidgets) extended with per-item OnEnter
+-- that temporarily applies the hovered border texture to the bar.
+-- Reverts to the saved texture when the dropdown closes without a
+-- confirmed selection.
+-- ===================================================================
+local AceGUI  = LibStub and LibStub("AceGUI-3.0", true)
+local AGSMW   = LibStub and LibStub("AceGUISharedMediaWidgets-1.0", true)
+local PREVIEW_WIDGET = "ArcUI-LSM30-Border-Preview"
+
+do
+  if AceGUI and AGSMW and not AceGUI:GetWidgetVersion(PREVIEW_WIDGET) then
+
+    local contentFrameCache = {}
+
+    local function ReturnSelf(self)
+      self:ClearAllPoints()
+      self:Hide()
+      self.check:Hide()
+      table.insert(contentFrameCache, self)
+    end
+
+    -- User clicked an item: commit preview, fire OnValueChanged.
+    local function ContentOnClick(this)
+      local self = this.obj
+      ForkBorderPreview.active     = false
+      ForkBorderPreview.saved      = nil
+      ForkBorderPreview.currentCfg = nil
+      self:Fire("OnValueChanged", this.text:GetText())
+      if self.dropdown then
+        self.dropdown = AGSMW:ReturnDropDownFrame(self.dropdown)
+      end
+    end
+
+    -- User hovered an item: show border in dropdown backdrop AND on the bar.
+    local function ContentOnEnter(this)
+      local self    = this.obj
+      local texName = this.text:GetText()
+
+      -- Dropdown backdrop preview (same as upstream LSM30_Border).
+      local borderPath = (self.list and self.list[texName] ~= texName and self.list[texName])
+                         or (LSM and LSM:Fetch("border", texName))
+      if borderPath then
+        this.dropdown:SetBackdrop({
+          edgeFile = borderPath,
+          bgFile   = [[Interface\DialogFrame\UI-DialogBox-Background-Dark]],
+          tile = true, tileSize = 16, edgeSize = 16,
+          insets = { left = 4, right = 4, top = 4, bottom = 4 },
+        })
+      end
+
+      -- Bar preview: temporarily apply the hovered texture to the bar.
+      if ForkBorderPreview.active
+         and ForkBorderPreview.currentCfg
+         and ForkBorderPreview.refreshFn then
+        ForkBorderPreview.currentCfg.display.borderTexture = texName
+        ForkBorderPreview.refreshFn()
+      end
+    end
+
+    local function GetContentLine()
+      local frame
+      if next(contentFrameCache) then
+        frame = table.remove(contentFrameCache)
+      else
+        frame = CreateFrame("Button", nil, UIParent)
+          frame:SetHeight(18)
+          frame:SetHighlightTexture([[Interface\QuestFrame\UI-QuestTitleHighlight]], "ADD")
+          frame:SetScript("OnClick",  ContentOnClick)
+          frame:SetScript("OnEnter", ContentOnEnter)
+        local check = frame:CreateTexture("OVERLAY")
+          check:SetWidth(16)
+          check:SetHeight(16)
+          check:SetPoint("LEFT", frame, "LEFT", 1, -1)
+          check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+          check:Hide()
+        frame.check = check
+        local text = frame:CreateFontString(nil, "OVERLAY", "GameFontWhite")
+          text:SetPoint("TOPLEFT",     check, "TOPRIGHT",    1,  0)
+          text:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -2, 0)
+          text:SetJustifyH("LEFT")
+        frame.text = text
+        frame.ReturnSelf = ReturnSelf
+      end
+      frame:Show()
+      return frame
+    end
+
+    local function OnAcquire(self)
+      self:SetHeight(44)
+      self:SetWidth(200)
+    end
+
+    local function OnRelease(self)
+      self:SetText("")
+      self:SetLabel("")
+      self:SetDisabled(false)
+      self.value = nil
+      self.list  = nil
+      self.open  = nil
+      self.frame:ClearAllPoints()
+      self.frame:Hide()
+    end
+
+    local function SetValue(self, value)
+      if self.list then self:SetText(value or "") end
+      self.value = value
+    end
+
+    local function GetValue(self) return self.value end
+
+    local function SetList(self, list)
+      self.list = list or (LSM and LSM:HashTable("border")) or {}
+    end
+
+    local function SetText(self, text)
+      self.frame.text:SetText(text or "")
+      local borderPath = (self.list and self.list[text] ~= text and self.list[text])
+                         or (LSM and LSM:Fetch("border", text))
+      if borderPath then
+        self.frame.displayButton:SetBackdrop({
+          edgeFile = borderPath,
+          bgFile   = [[Interface\DialogFrame\UI-DialogBox-Background-Dark]],
+          tile = true, tileSize = 16, edgeSize = 16,
+          insets = { left = 4, right = 4, top = 4, bottom = 4 },
+        })
+      end
+    end
+
+    local function SetLabel(self, text) self.frame.label:SetText(text or "") end
+
+    local function AddItem(self, key, value)
+      self.list = self.list or {}
+      self.list[key] = value
+    end
+    local SetItemValue = AddItem
+    local function SetMultiselect()  end
+    local function GetMultiselect()  return false end
+    local function SetItemDisabled() end
+
+    local function SetDisabled(self, disabled)
+      self.disabled = disabled
+      if disabled then self.frame:Disable() else self.frame:Enable() end
+    end
+
+    local sortedlist = {}
+    local function textSort(a, b) return string.upper(a) < string.upper(b) end
+
+    -- Close/revert: called when dropdown is dismissed without a selection.
+    local function ClearFocus(self)
+      if self.dropdown then
+        if ForkBorderPreview.active then
+          ForkBorderPreview.active = false
+          if ForkBorderPreview.currentCfg and ForkBorderPreview.refreshFn then
+            ForkBorderPreview.currentCfg.display.borderTexture = ForkBorderPreview.saved
+            ForkBorderPreview.refreshFn()
+          end
+          ForkBorderPreview.saved      = nil
+          ForkBorderPreview.currentCfg = nil
+        end
+        self.dropdown = AGSMW:ReturnDropDownFrame(self.dropdown)
+      end
+    end
+
+    local function OnHide(this)
+      this.obj:ClearFocus()
+    end
+
+    local function Drop_OnEnter(this) this.obj:Fire("OnEnter") end
+    local function Drop_OnLeave(this) this.obj:Fire("OnLeave") end
+
+    local function ToggleDrop(this)
+      local self = this.obj
+      if self.dropdown then
+        self:ClearFocus()
+        AceGUI:ClearFocus()
+      else
+        AceGUI:SetFocus(self)
+        self.dropdown = AGSMW:GetDropDownFrame()
+        local width = self.frame:GetWidth()
+        self.dropdown:SetPoint("TOPLEFT",  self.frame, "BOTTOMLEFT")
+        self.dropdown:SetPoint("TOPRIGHT", self.frame, "BOTTOMRIGHT",
+          width < 160 and (160 - width) or 0, 0)
+        for k in pairs(self.list or {}) do
+          sortedlist[#sortedlist + 1] = k
+        end
+        table.sort(sortedlist, textSort)
+        for _, k in ipairs(sortedlist) do
+          local f = GetContentLine()
+          f.text:SetText(k)
+          if k == self.value then f.check:Show() end
+          f.obj      = self
+          f.dropdown = self.dropdown
+          self.dropdown:AddFrame(f)
+        end
+        wipe(sortedlist)
+        -- Activate preview state now that the list is built.
+        if ForkBorderPreview.getCfgFn and ForkBorderPreview.refreshFn then
+          local cfg = ForkBorderPreview.getCfgFn()
+          if cfg and cfg.display then
+            ForkBorderPreview.active     = true
+            ForkBorderPreview.saved      = cfg.display.borderTexture
+            ForkBorderPreview.currentCfg = cfg
+          end
+        end
+      end
+    end
+
+    local function Constructor()
+      local frame = AGSMW:GetBaseFrameWithWindow()
+      local self  = {}
+      self.type   = PREVIEW_WIDGET
+      self.frame  = frame
+      frame.obj   = self
+      frame.dropButton.obj = self
+      frame.dropButton:SetScript("OnEnter", Drop_OnEnter)
+      frame.dropButton:SetScript("OnLeave", Drop_OnLeave)
+      frame.dropButton:SetScript("OnClick", ToggleDrop)
+      frame:SetScript("OnHide", OnHide)
+      self.alignoffset     = 31
+      self.OnRelease       = OnRelease
+      self.OnAcquire       = OnAcquire
+      self.ClearFocus      = ClearFocus
+      self.SetText         = SetText
+      self.SetValue        = SetValue
+      self.GetValue        = GetValue
+      self.SetList         = SetList
+      self.SetLabel        = SetLabel
+      self.SetDisabled     = SetDisabled
+      self.AddItem         = AddItem
+      self.SetItemValue    = SetItemValue
+      self.SetMultiselect  = SetMultiselect
+      self.GetMultiselect  = GetMultiselect
+      self.SetItemDisabled = SetItemDisabled
+      self.ToggleDrop      = ToggleDrop
+      AceGUI:RegisterAsWidget(self)
+      return self
+    end
+
+    AceGUI:RegisterWidgetType(PREVIEW_WIDGET, Constructor, 1)
+  end
+end
 
 -- ===================================================================
 -- FORK BACKDROP MIXIN
@@ -212,7 +472,7 @@ hooksecurefunc(ns.Resources, "ApplyAppearance", function(barNumber)
   local mainFrame = ns.Resources.GetBarFrame and ns.Resources.GetBarFrame(barNumber)
   if not mainFrame then return end
 
-  -- ── MASK SYSTEM ──────────────────────────────────────────────────
+  -- ── MASK SYSTEM ───────────────────────────────────────────────────────────
   local maskStyle = cfg.display.maskStyle
   local maskPath  = maskStyle and MASK_STYLES[maskStyle]
 
@@ -279,7 +539,7 @@ hooksecurefunc(ns.Resources, "ApplyAppearance", function(barNumber)
     end
   end
 
-  -- ── 8-SLICE BORDER SYSTEM ────────────────────────────────────────
+  -- ── 8-SLICE BORDER SYSTEM ────────────────────────────────────────────────
   local borderOverlay = mainFrame.borderOverlay
   if not borderOverlay then return end
 
@@ -316,15 +576,22 @@ hooksecurefunc(ns.Resources, "ApplyAppearance", function(barNumber)
       -- a child rather than patching it directly.
       if not borderOverlay._forkBackdrop then
         local bd = CreateFrame("Frame", nil, borderOverlay)
-        bd:SetAllPoints(mainFrame)
         bd:SetFrameLevel(borderOverlay:GetFrameLevel() + 1)
         Mixin(bd, ForkBackdropMixin)
         borderOverlay._forkBackdrop = bd
       end
 
-      local bd      = borderOverlay._forkBackdrop
+      local bd       = borderOverlay._forkBackdrop
       local edgeSize = cfg.display.borderEdgeSize or 12
-      local bc      = cfg.display.borderColor or { r = 0, g = 0, b = 0, a = 1 }
+      local inset    = cfg.display.borderInset or 0
+      local bc       = cfg.display.borderColor or { r = 0, g = 0, b = 0, a = 1 }
+
+      -- Position the backdrop frame relative to mainFrame, honouring inset.
+      -- Positive inset shrinks the border inward; negative extends it outward.
+      bd:ClearAllPoints()
+      bd:SetPoint("TOPLEFT",     mainFrame, "TOPLEFT",     -inset,  inset)
+      bd:SetPoint("BOTTOMRIGHT", mainFrame, "BOTTOMRIGHT",  inset, -inset)
+
       bd:SetBackdrop({
         edgeFile = texPath,
         edgeSize = edgeSize,
@@ -350,7 +617,7 @@ end)
 -- ===================================================================
 -- OPTIONS INJECTION
 -- Wraps ns.AppearanceOptions.GetOptionsTable to add mask/border
--- controls into the existing FRAME BORDER section (orders 51.5-51.75).
+-- controls into the existing FRAME BORDER section (orders 51.5-51.76).
 --
 -- Selection state is derived from the existing barSelector.get(), which
 -- is the same source the rest of the Appearance panel uses. We do not
@@ -395,6 +662,11 @@ do
           ns.Resources.ApplyAppearance(tonumber(barNum))
         end
       end
+
+      -- Wire up preview state so the custom widget can reach these
+      -- closures when the border texture dropdown is opened.
+      ForkBorderPreview.getCfgFn  = ForkGetSelectedConfig
+      ForkBorderPreview.refreshFn = ForkRefreshSelectedBar
 
       -- Returns true when the border section is expanded (not collapsed).
       -- Reads the CollapsibleHeader toggle's get() directly so we avoid
@@ -464,12 +736,15 @@ do
         end,
       }
 
-      -- Border Texture: only visible when borderType = "texture".
+      -- Border Texture: uses the custom preview widget so hovering over an
+      -- item temporarily applies that texture to the bar. Reverts on close
+      -- without selection.
       opts.args.forkBorderTexture = {
-        type    = "select",
-        name    = "Border Texture",
-        desc    = "LSM-registered border texture used as the 8-slice overlay.",
-        values  = function()
+        type          = "select",
+        dialogControl = PREVIEW_WIDGET,
+        name          = "Border Texture",
+        desc          = "LSM-registered border texture. Hover to preview; click to confirm.",
+        values        = function()
           return (LSM and LSM:HashTable("border")) or {}
         end,
         get     = function()
@@ -493,15 +768,13 @@ do
         end,
       }
 
-      -- Border Edge Size: only visible when borderType = "texture".
-      -- LSM does not store the edgeSize an author intended, so this must
-      -- be set by the user. Standard Blizzard edge files use 8, 12, 16,
-      -- 32, or 64; the default of 12 matches most tooltip-style borders.
+      -- Border Edge Size: minimum lowered to 1 to allow very thin slices.
+      -- Placed at half-width so it shares a row with Border Inset.
       opts.args.forkBorderEdgeSize = {
         type  = "range",
-        name  = "Border Edge Size",
-        desc  = "Corner and edge slice thickness in pixels (4–64). Match to the border texture's authored edge size.",
-        min   = 4,
+        name  = "Edge Size",
+        desc  = "Corner and edge slice thickness in pixels (1–64). Match to the border texture's authored edge size.",
+        min   = 1,
         max   = 64,
         step  = 1,
         get   = function()
@@ -516,7 +789,38 @@ do
           end
         end,
         order  = 51.75,
-        width  = "full",
+        width  = "half",
+        hidden = function()
+          if not IsBorderOpen() then return true end
+          local cfg = ForkGetSelectedConfig()
+          if not (cfg and cfg.display.showBorder) then return true end
+          return (cfg.display.borderType or "drawn") ~= "texture"
+        end,
+      }
+
+      -- Border Inset: positive values inset the border frame from the bar
+      -- edges; negative values extend it outward beyond the bar edges.
+      -- Shares a row with Border Edge Size (both width = half).
+      opts.args.forkBorderInset = {
+        type  = "range",
+        name  = "Border Inset",
+        desc  = "Offset of the border frame from the bar edges in pixels. Positive = inward, negative = outward.",
+        min   = -20,
+        max   = 20,
+        step  = 1,
+        get   = function()
+          local cfg = ForkGetSelectedConfig()
+          return (cfg and cfg.display.borderInset) or 0
+        end,
+        set   = function(info, value)
+          local cfg = ForkGetSelectedConfig()
+          if cfg then
+            cfg.display.borderInset = value
+            ForkRefreshSelectedBar()
+          end
+        end,
+        order  = 51.76,
+        width  = "half",
         hidden = function()
           if not IsBorderOpen() then return true end
           local cfg = ForkGetSelectedConfig()
