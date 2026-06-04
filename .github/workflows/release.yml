@@ -38,7 +38,7 @@ jobs:
         run: |
           mkdir -p /tmp/release/ArcUI
           rsync -a --exclude='.git' --exclude='.github' --exclude='docs' \
-                --exclude='.mcp.json' --exclude='.gitignore' . /tmp/release/ArcUI/
+                --exclude='.mcp.json' --exclude='.env*' --exclude='.gitignore' . /tmp/release/ArcUI/
           # Stamp the full fork version into the packaged TOC only (repo TOC stays at upstream base)
           sed -i "s|^## Version:.*|## Version: ${{ steps.version.outputs.full }}|" /tmp/release/ArcUI/ArcUI.toc
           cd /tmp/release
