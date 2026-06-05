@@ -7842,7 +7842,7 @@ function ns.AppearanceOptions.GetOptionsTable()
         type = "range",
         name = "Bar Inset",
         desc = "Padding between the border and the bar fill texture. 0 = fill touches border edge.",
-        min = 0, max = 10, step = 1,
+        min = -20, max = 20, step = 1, -- [FORK] extended range; was min=0,max=10
         get = function()
           local cfg = GetSelectedConfig()
           return cfg and cfg.display.barPadding or 0
