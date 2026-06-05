@@ -89,8 +89,8 @@ end
 BGA.GetIconInsetY = GetIconInsetY
 
 -- Y inset (bottom): distance in WoW units from container bottom edge UP to the
--- bottom edge of the lowest visible icon. Use as positive Y offset in a TOPLEFT
--- anchor so the bar sits flush against the icon area bottom, not the container edge.
+-- bottom edge of the lowest visible icon. Use as positive Y offset so the bar
+-- sits flush against the icon area bottom, not the container edge.
 local function GetIconInsetBottom(group)
   local rawBase = group and group._slotInsetPx or 0
   if not group or not group.members or not group.container then return rawBase end
@@ -112,93 +112,100 @@ end
 BGA.GetIconInsetBottom = GetIconInsetBottom
 
 -- ===================================================================
+-- LEGACY MIGRATION
+-- Reads anchorSourcePoint/anchorDestPoint from a display config,
+-- falling back to the old 4-point anchorPoint field for existing profiles.
+-- ===================================================================
+
+local LEGACY_ANCHOR_MAP = {
+  TOP    = { "BOTTOM", "TOP"    },
+  BOTTOM = { "TOP",    "BOTTOM" },
+  LEFT   = { "RIGHT",  "LEFT"   },
+  RIGHT  = { "LEFT",   "RIGHT"  },
+}
+
+--- Returns sourcePoint, destPoint from a display config, migrating legacy anchorPoint if needed.
+--- @param display table cfg.display table
+--- @return string sourcePoint, string destPoint
+function BGA.GetAnchorPoints(display)
+  local src = display.anchorSourcePoint
+  local dst = display.anchorDestPoint
+  if not src or not dst then
+    local m = LEGACY_ANCHOR_MAP[display.anchorPoint or "BOTTOM"] or LEGACY_ANCHOR_MAP.BOTTOM
+    src, dst = m[1], m[2]
+  end
+  return src, dst
+end
+
+-- ===================================================================
 -- DIMENSION HELPERS
 -- ===================================================================
 
---- Returns the correct bar width (or height for vertical fragmented) in WoW units.
+--- Returns the matched bar dimension in WoW units.
+--- For horizontal bars (isVertical=false) matches group WIDTH (_slotAreaW).
+--- For vertical bars (isVertical=true) matches group HEIGHT (_slotAreaH).
+--- Size formula: baseDim * (1 + sizeAdjustPct/100) + sizeAdjust
 --- @param group table CDMGroups group object
---- @param isFragVertical boolean true for vertical fragmented layout
---- @param isSideAnchor boolean true for LEFT/RIGHT anchor points
---- @param sizeAdjust number? optional matchWidthAdjust
---- @return number? dimension, or nil if group not ready
-function BGA.GetMatchedDimension(group, isFragVertical, isSideAnchor, sizeAdjust)
+--- @param isVertical boolean true when the bar's primary axis is vertical
+--- @param sizeAdjust number? pixel offset (cfg.display.matchWidthAdjust)
+--- @param sizeAdjustPct number? percentage offset, -100..200 (cfg.display.matchWidthAdjustPct)
+--- @return number? dimension in WoW units, or nil if group not ready
+function BGA.GetMatchedDimension(group, isVertical, sizeAdjust, sizeAdjustPct)
   if not group then return nil end
   local dim
-  if isFragVertical then
-    -- Vertical fragmented: long dimension is always H regardless of anchor side
+  if isVertical then
     dim = group._slotAreaHRaw or group._slotAreaH
   else
-    -- Horizontal / non-fragmented: side anchors need H, others need W
-    dim = isSideAnchor
-      and (group._slotAreaHRaw or group._slotAreaH)
-      or  (group._slotAreaWRaw or group._slotAreaW)
+    dim = group._slotAreaWRaw or group._slotAreaW
   end
   if not dim or dim <= 0 then return nil end
-  return SnapToGroupPx(dim + (sizeAdjust or 0))
+  local pct = sizeAdjustPct or 0
+  local px  = sizeAdjust or 0
+  return SnapToGroupPx(dim * (1 + pct / 100) + px)
 end
 
 -- ===================================================================
 -- ANCHOR APPLICATION
--- Single function that handles all four anchor sides with correct
--- icon-aligned offsets. Call this instead of frame:SetPoint directly.
 -- ===================================================================
 
---- Apply group-aligned anchor to a bar frame.
+--- Apply group-aligned anchor to a bar frame using explicit 9-point anchor names.
+--- When applyIconEdges is true, an automatic Y inset aligns the bar flush with
+--- icon edges when destPoint is a top/bottom container edge (resource bars only).
 --- @param frame table WoW frame to anchor
 --- @param container table CDMGroups container frame
 --- @param group table CDMGroups group object
---- @param anchorPoint string "TOP"|"BOTTOM"|"LEFT"|"RIGHT"
---- @param barWidth number computed bar width (used for non-matched fallback)
+--- @param sourcePoint string WoW anchor point on the bar (e.g. "TOP", "BOTTOMLEFT")
+--- @param destPoint string WoW anchor point on the container
 --- @param offsetX number cfg.display.anchorOffsetX
 --- @param offsetY number cfg.display.anchorOffsetY
---- @param matchSlots boolean true = use icon-aligned insets
-function BGA.ApplyAnchor(frame, container, group, anchorPoint, barWidth, offsetX, offsetY, matchSlots)
-  local insetX = matchSlots and GetIconInsetX(group) or 0
-  local insetY = matchSlots and GetIconInsetY(group) or 0
-
-  frame:ClearAllPoints()
-  if anchorPoint == "TOP" then
-    if matchSlots then
-      local insetYTop = GetIconInsetY(group)
-      frame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", insetX + offsetX, -insetYTop + offsetY)
-    else
-      frame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", offsetX, offsetY)
-    end
-  elseif anchorPoint == "BOTTOM" then
-    if matchSlots then
-      local insetBottom = GetIconInsetBottom(group)
-      frame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", insetX + offsetX, insetBottom + offsetY)
-    else
-      frame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", offsetX, offsetY)
-    end
-  elseif anchorPoint == "LEFT" then
-    if matchSlots then
-      frame:SetPoint("TOPRIGHT", container, "TOPLEFT", offsetX, -(insetY + offsetY))
-    else
-      frame:SetPoint("RIGHT", container, "LEFT", offsetX, offsetY)
-    end
-  elseif anchorPoint == "RIGHT" then
-    if matchSlots then
-      frame:SetPoint("TOPLEFT", container, "TOPRIGHT", offsetX, -(insetY + offsetY))
-    else
-      frame:SetPoint("LEFT", container, "RIGHT", offsetX, offsetY)
+--- @param applyIconEdges boolean? auto Y icon-edge inset for resource bars
+function BGA.ApplyAnchor(frame, container, group, sourcePoint, destPoint, offsetX, offsetY, applyIconEdges)
+  local ox = offsetX or 0
+  local oy = offsetY or 0
+  if applyIconEdges then
+    if destPoint == "TOP" or destPoint == "TOPLEFT" or destPoint == "TOPRIGHT" then
+      oy = oy - GetIconInsetY(group)
+    elseif destPoint == "BOTTOM" or destPoint == "BOTTOMLEFT" or destPoint == "BOTTOMRIGHT" then
+      oy = oy + GetIconInsetBottom(group)
     end
   end
+  frame:ClearAllPoints()
+  frame:SetPoint(sourcePoint, container, destPoint, ox, oy)
 end
 
 -- ===================================================================
 -- HIGH-LEVEL HELPERS (convenience wrappers using groupName string)
 -- ===================================================================
 
---- Returns matched bar width in WoW units by group name.
+--- Returns matched dimension by group name.
 --- @param groupName string
---- @param isFragVertical boolean
---- @param isSideAnchor boolean
+--- @param isVertical boolean
 --- @param sizeAdjust number?
+--- @param sizeAdjustPct number?
 --- @return number?
-function BGA.GetMatchedDimensionByName(groupName, isFragVertical, isSideAnchor, sizeAdjust)
+function BGA.GetMatchedDimensionByName(groupName, isVertical, sizeAdjust, sizeAdjustPct)
   local group = ns.CDMGroups and ns.CDMGroups.groups and ns.CDMGroups.groups[groupName]
-  return BGA.GetMatchedDimension(group, isFragVertical, isSideAnchor, sizeAdjust)
+  return BGA.GetMatchedDimension(group, isVertical, sizeAdjust, sizeAdjustPct)
 end
 
 --- Returns X icon inset by group name.
@@ -218,8 +225,6 @@ function BGA.GetIconInsetYByName(groupName)
 end
 
 --- Returns bottom Y icon inset by group name.
---- Use as positive Y offset when anchoring a bar to BOTTOM of a group so it
---- sits flush with the icon bottom edge rather than the container bottom edge.
 --- @param groupName string
 --- @return number
 function BGA.GetIconInsetBottomByName(groupName)
@@ -227,33 +232,55 @@ function BGA.GetIconInsetBottomByName(groupName)
   return GetIconInsetBottom(group)
 end
 
---- Full size + anchor in one call. The main entry point for all bar types.
---- Handles dimension selection, SnapToGroupPx, and correct anchor for all four sides.
+--- Full size + anchor in one call. Main entry point for all bar types.
+---
+--- Size: when matchGroupWidth is true, the bar's primary-axis dimension is matched to the group.
+---   isVertical=false → match group WIDTH; isVertical=true → match group HEIGHT.
+---   Formula: matched = baseDim * (1 + sizeAdjustPct/100) + sizeAdjust
+---   matchSlotsOnly=true uses _slotAreaW/H; falls back to container dimensions if unavailable.
+---
+--- Anchor: frame:SetPoint(sourcePoint, container, destPoint, ox, oy).
+---   applyIconEdges adds Y inset when destPoint is a top/bottom edge (resource bars).
 ---
 --- @param frame table bar's root frame
 --- @param groupName string cfg.display.anchorGroupName
---- @param anchorPoint string "TOP"|"BOTTOM"|"LEFT"|"RIGHT"
---- @param barHeight number already-computed bar height (from cfg.display.height * scale)
+--- @param sourcePoint string WoW anchor point on the bar
+--- @param destPoint string WoW anchor point on the container
+--- @param barHeight number the bar's non-matched dimension (cfg.display.height * scale)
 --- @param offsetX number cfg.display.anchorOffsetX
 --- @param offsetY number cfg.display.anchorOffsetY
 --- @param matchGroupWidth boolean cfg.display.matchGroupWidth
 --- @param matchSlotsOnly boolean cfg.display.matchSlotsOnly
---- @param isFragVertical boolean true for vertical fragmented bars
---- @param sizeAdjust number? cfg.display.matchWidthAdjust
---- @param needsSwap boolean? true when width/height should be swapped in SetSize
---- @return number? barWidth the resolved width (or nil if group not found)
-function BGA.ApplySizeAndAnchor(frame, groupName, anchorPoint, barHeight, offsetX, offsetY,
-    matchGroupWidth, matchSlotsOnly, isFragVertical, sizeAdjust, needsSwap)
+--- @param isVertical boolean true when the bar's primary axis is vertical
+--- @param sizeAdjust number? cfg.display.matchWidthAdjust (pixel offset, applied after pct)
+--- @param sizeAdjustPct number? cfg.display.matchWidthAdjustPct (percentage, -100..200)
+--- @param needsSwap boolean? swap SetSize width/height arguments (vertical bars)
+--- @param applyIconEdges boolean? auto Y icon-edge inset, resource bars only
+--- @return number? barWidth the resolved matched dimension, or nil if not matched
+function BGA.ApplySizeAndAnchor(frame, groupName, sourcePoint, destPoint, barHeight, offsetX, offsetY,
+    matchGroupWidth, matchSlotsOnly, isVertical, sizeAdjust, sizeAdjustPct, needsSwap, applyIconEdges)
 
   local group = ns.CDMGroups and ns.CDMGroups.groups and ns.CDMGroups.groups[groupName]
   if not group or not group.container then return nil end
   local container = group.container
 
-  local isSideAnchor = (anchorPoint == "LEFT" or anchorPoint == "RIGHT")
   local barWidth
 
   if matchGroupWidth then
-    local dim = BGA.GetMatchedDimension(group, isFragVertical, isSideAnchor, sizeAdjust)
+    local dim
+    if matchSlotsOnly then
+      dim = BGA.GetMatchedDimension(group, isVertical, sizeAdjust, sizeAdjustPct)
+    end
+    if not dim then
+      -- Fall back to container dimensions (matchSlotsOnly=false, or slot area not yet computed)
+      local cW, cH = container:GetWidth(), container:GetHeight()
+      local base = isVertical and cH or cW
+      if base > 0 then
+        local pct = sizeAdjustPct or 0
+        local px  = sizeAdjust or 0
+        dim = SnapToGroupPx(base * (1 + pct / 100) + px)
+      end
+    end
     if dim and dim > 0 then
       barWidth = dim
       if needsSwap then
@@ -264,8 +291,7 @@ function BGA.ApplySizeAndAnchor(frame, groupName, anchorPoint, barHeight, offset
     end
   end
 
-  local matchSlots = matchGroupWidth and matchSlotsOnly and barWidth
-  BGA.ApplyAnchor(frame, container, group, anchorPoint, barWidth, offsetX, offsetY, matchSlots)
+  BGA.ApplyAnchor(frame, container, group, sourcePoint, destPoint, offsetX, offsetY, applyIconEdges)
 
   return barWidth
 end
