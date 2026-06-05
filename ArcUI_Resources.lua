@@ -1,4 +1,3 @@
--- ===================================================================
 -- ArcUI_Resources.lua
 -- Primary AND Secondary Resource tracking with threshold color layers
 -- Uses multi-bar overlay technique for secret-value-safe color changes
@@ -6066,93 +6065,24 @@ function ns.Resources.ApplyAppearance(barNumber)
     local group = ns.CDMGroups and ns.CDMGroups.groups and ns.CDMGroups.groups[display.anchorGroupName]
     if group and group.container then
       local container = group.container
-      local anchorPoint = display.anchorPoint or "BOTTOM"
-      local offsetX = display.anchorOffsetX or 0
-      local offsetY = display.anchorOffsetY or 0
-      
+      local BGA = ns.BarGroupAlign
+      local sourcePoint, destPoint = BGA.GetAnchorPoints(display)
+      local isFragmented   = (display.thresholdMode == "fragmented")
+      local isFragVertical = isFragmented and (display.fragmentedLayoutDirection == "vertical")
+      local isVerticalBar  = needsSwap or isFragVertical
+      local useMatchSlots  = display.matchSlotsOnly or isFragmented
+      local applyIconEdges = display.matchGroupWidth and useMatchSlots and display.matchIconEdges
       local effScale = container:GetEffectiveScale()
-      local isSideAnchor = (anchorPoint == "LEFT" or anchorPoint == "RIGHT")
+      local barHeight = PixelSnap((display.height or 25) * scale, effScale)
 
-      -- Compute barWidth first so anchor can center over slot area.
-      -- _slotAreaW is plain WoW units — no _pmult conversion needed.
-      local barWidth, barHeight
-      if display.matchGroupWidth then
-        local matchDimension
-        -- Fragmented bars: always use _slotAreaW so segments divide evenly.
-        -- containerW includes padding which makes barWidth*ppu not divisible by numSegments.
-        -- Non-fragmented bars: respect matchSlotsOnly setting as before.
-        local isFragmented = (display.thresholdMode == "fragmented")
-        local isFragVertical = isFragmented and (display.fragmentedLayoutDirection == "vertical")
-        if (isFragmented or display.matchSlotsOnly) and group._slotAreaW then
-          if isFragVertical then
-            -- Vertical fragmented: long dimension is always H regardless of anchor side.
-            -- needsSwap puts matchDimension into frame height via SetSize(barHeight, barWidth).
-            matchDimension = group._slotAreaHRaw or group._slotAreaH
-          else
-            -- Horizontal fragmented / non-fragmented: side anchors match H, others match W.
-            matchDimension = isSideAnchor and (group._slotAreaHRaw or group._slotAreaH) or (group._slotAreaWRaw or group._slotAreaW)
-          end
-        else
-          local cW, cH = container:GetWidth(), container:GetHeight()
-          matchDimension = isSideAnchor and cH or cW
-        end
-        if matchDimension and matchDimension > 0 then
-          local sizeAdjust = display.matchWidthAdjust or 0
-          -- SnapToGroupPx: same formula CDMGroups uses for _slotAreaW (1-pixel, UIParent scale).
-          barWidth  = SnapToGroupPx(matchDimension + sizeAdjust)
-          barHeight = PixelSnap((display.height or 25) * scale, effScale)
-
-          -- For fragmented bars: do NOT round barWidth to a numSegments multiple.
-          -- Segment sizing uses raw float division (mfW / numSegments) so the GPU
-          -- handles subpixel edges identically to WeakAuras/ElvUI. Rounding to whole
-          -- pixels causes either unequal segments or bar overhang — both worse than
-          -- the imperceptible ~0.5px subpixel blend at segment boundaries.
-
-          -- Swap for vertical orientation or fragmented vertical layout
-          if needsSwap then
-            mainFrame:SetSize(barHeight, barWidth)
-          else
-            mainFrame:SetSize(barWidth, barHeight)
-          end
-        end
-      end
-
-      -- Anchor: matchSlotsOnly TOP/BOTTOM aligns bar LEFT EDGE to the first icon's left edge.
-      -- rawBase is the inset from container edge to icon area.
-      -- GetActualIconInset reads real icon frame positions — handles all sub-pixel cases
-      -- slot width is odd (CENTER-anchor floor division vs TOPLEFT anchor).
-      local rawBase    = (group and group._slotInsetPx) or 0
-      local alignInset       = GetActualIconInset(group)
-      local alignInsetY      = GetActualIconInsetY(group)
-      local alignInsetBottom = GetActualIconInsetBottom(group)
-      
-      local matchSlots = display.matchGroupWidth and display.matchSlotsOnly and barWidth
-      mainFrame:ClearAllPoints()
-      if anchorPoint == "TOP" then
-        if matchSlots then
-          mainFrame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", alignInset + offsetX, (display.matchIconEdges and -alignInsetY or 0) + offsetY)
-        else
-          mainFrame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", offsetX, offsetY)
-        end
-      elseif anchorPoint == "BOTTOM" then
-        if matchSlots then
-          mainFrame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", alignInset + offsetX, (display.matchIconEdges and alignInsetBottom or 0) + offsetY)
-        else
-          mainFrame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", offsetX, offsetY)
-        end
-      elseif anchorPoint == "LEFT" then
-        if matchSlots then
-          mainFrame:SetPoint("TOPRIGHT", container, "TOPLEFT", offsetX, -(alignInsetY + offsetY))
-        else
-          mainFrame:SetPoint("RIGHT", container, "LEFT", offsetX, offsetY)
-        end
-      elseif anchorPoint == "RIGHT" then
-        if matchSlots then
-          mainFrame:SetPoint("TOPLEFT", container, "TOPRIGHT", offsetX, -(alignInsetY + offsetY))
-        else
-          mainFrame:SetPoint("LEFT", container, "RIGHT", offsetX, offsetY)
-        end
-      end
+      local barWidth = BGA.ApplySizeAndAnchor(mainFrame, display.anchorGroupName,
+          sourcePoint, destPoint,
+          barHeight,
+          display.anchorOffsetX or 0, display.anchorOffsetY or 0,
+          display.matchGroupWidth, useMatchSlots,
+          isVerticalBar,
+          display.matchWidthAdjust or 0, display.matchWidthAdjustPct or 0,
+          needsSwap, applyIconEdges)
 
       if display.matchGroupWidth then
         -- size already applied above; block kept for hook registration
