@@ -10,8 +10,7 @@
 --   maskStyle      string  "none" | "blizzard-classic" | "blizzard-classic-thin"
 --   borderType     string  "drawn" (default) | "texture"
 --   borderTexture  string  LSM border name (used when borderType = "texture")
---   borderEdgeSize number  8-slice corner/edge thickness in px (default 12)
---   borderInset    number  8-slice border frame inset in px (default 0, range -20..20)
+--   (edge size reads drawnBorderThickness; inset reads barPadding -- [FORK] reuses upstream sliders)
 -- ===================================================================
 
 local ADDON, ns = ...
@@ -545,14 +544,13 @@ hooksecurefunc(ns.Resources, "ApplyAppearance", function(barNumber)
 
   local borderType = cfg.display.borderType or "drawn"
 
-  -- Migration: configs that referenced a Sensei full-frame border are
-  -- reset to "drawn". Sensei borders are whole-frame images, not 8-slice
-  -- edge files, and would render incorrectly under this renderer.
+  -- [FORK] Sensei borders are whole-frame images, not 8-slice edge files.
+  -- Detect at render-time and fall back to "drawn" without mutating the
+  -- saved config. Mutating borderType during a preview hover permanently
+  -- corrupts the selection and reverts the UI to drawn mode.
   if borderType == "texture" then
     local texName = cfg.display.borderTexture
     if texName and SENSEI_FULLFRAME_BORDERS[texName] then
-      cfg.display.borderType   = "drawn"
-      cfg.display.borderTexture = nil
       borderType = "drawn"
     end
   end
@@ -582,8 +580,8 @@ hooksecurefunc(ns.Resources, "ApplyAppearance", function(barNumber)
       end
 
       local bd       = borderOverlay._forkBackdrop
-      local edgeSize = cfg.display.borderEdgeSize or 12
-      local inset    = cfg.display.borderInset or 0
+      local edgeSize = cfg.display.drawnBorderThickness or 12  -- [FORK] reuses Thickness slider
+      local inset    = cfg.display.barPadding or 0              -- [FORK] reuses Bar Inset slider
       local bc       = cfg.display.borderColor or { r = 0, g = 0, b = 0, a = 1 }
 
       -- Position the backdrop frame relative to mainFrame, honouring inset.
@@ -768,66 +766,7 @@ do
         end,
       }
 
-      -- Border Edge Size: minimum lowered to 1 to allow very thin slices.
-      -- Placed at half-width so it shares a row with Border Inset.
-      opts.args.forkBorderEdgeSize = {
-        type  = "range",
-        name  = "Edge Size",
-        desc  = "Corner and edge slice thickness in pixels (1–64). Match to the border texture's authored edge size.",
-        min   = 1,
-        max   = 64,
-        step  = 1,
-        get   = function()
-          local cfg = ForkGetSelectedConfig()
-          return (cfg and cfg.display.borderEdgeSize) or 12
-        end,
-        set   = function(info, value)
-          local cfg = ForkGetSelectedConfig()
-          if cfg then
-            cfg.display.borderEdgeSize = value
-            ForkRefreshSelectedBar()
-          end
-        end,
-        order  = 51.75,
-        width  = "half",
-        hidden = function()
-          if not IsBorderOpen() then return true end
-          local cfg = ForkGetSelectedConfig()
-          if not (cfg and cfg.display.showBorder) then return true end
-          return (cfg.display.borderType or "drawn") ~= "texture"
-        end,
-      }
 
-      -- Border Inset: positive values inset the border frame from the bar
-      -- edges; negative values extend it outward beyond the bar edges.
-      -- Shares a row with Border Edge Size (both width = half).
-      opts.args.forkBorderInset = {
-        type  = "range",
-        name  = "Border Inset",
-        desc  = "Offset of the border frame from the bar edges in pixels. Positive = inward, negative = outward.",
-        min   = -20,
-        max   = 20,
-        step  = 1,
-        get   = function()
-          local cfg = ForkGetSelectedConfig()
-          return (cfg and cfg.display.borderInset) or 0
-        end,
-        set   = function(info, value)
-          local cfg = ForkGetSelectedConfig()
-          if cfg then
-            cfg.display.borderInset = value
-            ForkRefreshSelectedBar()
-          end
-        end,
-        order  = 51.76,
-        width  = "half",
-        hidden = function()
-          if not IsBorderOpen() then return true end
-          local cfg = ForkGetSelectedConfig()
-          if not (cfg and cfg.display.showBorder) then return true end
-          return (cfg.display.borderType or "drawn") ~= "texture"
-        end,
-      }
 
       return opts
     end
