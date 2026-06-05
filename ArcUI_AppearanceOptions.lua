@@ -1,4 +1,3 @@
--- ===================================================================
 -- ArcUI_AppearanceOptions.lua
 -- Unified Appearance panel for ALL bar types
 -- v2.8.1: Added charge text settings for cooldown duration bars
@@ -11239,27 +11238,57 @@ function ns.AppearanceOptions.GetOptionsTable()
           return GetSelectedConfig() == nil or not SupportsCDMGroupAnchor() or collapsedSections.groupAnchor or not (cfg and cfg.display.anchorToGroup)
         end
       },
-      anchorPoint = {
+      anchorPosition = {
         type = "select",
-        name = "Anchor Position",
-        desc = "Where to attach the bar relative to the group",
+        name = "Position",
+        desc = "Where to attach the bar relative to the group. Choose 'Advanced' for full 9-point control.",
         values = {
-          ["TOP"] = "Above",
-          ["BOTTOM"] = "Below",
-          ["LEFT"] = "Left",
-          ["RIGHT"] = "Right",
+          below    = "Below",
+          above    = "Above",
+          left     = "Left",
+          right    = "Right",
+          center   = "Center",
+          advanced = "|cffaaaaaa Advanced|r",
         },
-        sorting = {"TOP", "BOTTOM", "LEFT", "RIGHT"},
+        sorting = { "below", "above", "left", "right", "center", "advanced" },
         get = function()
           local cfg = GetSelectedConfig()
-          return cfg and cfg.display.anchorPoint or "BOTTOM"
+          if not cfg then return "below" end
+          local src = cfg.display.anchorSourcePoint
+          local dst = cfg.display.anchorDestPoint
+          if not src or not dst then
+            local legacy = { TOP = "above", BOTTOM = "below", LEFT = "left", RIGHT = "right" }
+            return legacy[cfg.display.anchorPoint or "BOTTOM"] or "below"
+          end
+          if src == "BOTTOM" and dst == "TOP"     then return "above"
+          elseif src == "TOP"    and dst == "BOTTOM" then return "below"
+          elseif src == "RIGHT"  and dst == "LEFT"   then return "left"
+          elseif src == "LEFT"   and dst == "RIGHT"  then return "right"
+          elseif src == "CENTER" and dst == "CENTER" then return "center"
+          else return "advanced" end
         end,
         set = function(info, value)
           local cfg = GetSelectedConfig()
-          if cfg then
-            cfg.display.anchorPoint = value
-            RefreshBar()
+          if not cfg then return end
+          local presets = {
+            below  = { "TOP",    "BOTTOM" },
+            above  = { "BOTTOM", "TOP"    },
+            left   = { "RIGHT",  "LEFT"   },
+            right  = { "LEFT",   "RIGHT"  },
+            center = { "CENTER", "CENTER" },
+          }
+          if presets[value] then
+            cfg.display.anchorSourcePoint = presets[value][1]
+            cfg.display.anchorDestPoint   = presets[value][2]
+            cfg.display.anchorAdvanced    = nil
+          else
+            if not cfg.display.anchorSourcePoint then
+              cfg.display.anchorSourcePoint = "TOP"
+              cfg.display.anchorDestPoint   = "BOTTOM"
+            end
+            cfg.display.anchorAdvanced = true
           end
+          RefreshBar()
         end,
         order = 85.3,
         width = 1.1,
@@ -11268,10 +11297,96 @@ function ns.AppearanceOptions.GetOptionsTable()
           return GetSelectedConfig() == nil or not SupportsCDMGroupAnchor() or collapsedSections.groupAnchor or not (cfg and cfg.display.anchorToGroup)
         end
       },
+      anchorSourcePoint = {
+        type = "select",
+        name = "Bar Point",
+        desc = "The point on the bar that attaches to the group.",
+        values = (ns.CDMGroupsAnchors and ns.CDMGroupsAnchors.ANCHOR_POINTS) or {
+          TOPLEFT="Top Left", TOP="Top", TOPRIGHT="Top Right",
+          LEFT="Left", CENTER="Center", RIGHT="Right",
+          BOTTOMLEFT="Bottom Left", BOTTOM="Bottom", BOTTOMRIGHT="Bottom Right",
+        },
+        sorting = (ns.CDMGroupsAnchors and ns.CDMGroupsAnchors.ANCHOR_POINTS_SORTED) or {
+          "TOPLEFT","TOP","TOPRIGHT","LEFT","CENTER","RIGHT","BOTTOMLEFT","BOTTOM","BOTTOMRIGHT",
+        },
+        get = function()
+          local cfg = GetSelectedConfig()
+          if not cfg then return "TOP" end
+          if cfg.display.anchorSourcePoint then return cfg.display.anchorSourcePoint end
+          local legacy = { TOP="BOTTOM", BOTTOM="TOP", LEFT="RIGHT", RIGHT="LEFT" }
+          return legacy[cfg.display.anchorPoint or "BOTTOM"] or "TOP"
+        end,
+        set = function(info, value)
+          local cfg = GetSelectedConfig()
+          if cfg then
+            cfg.display.anchorSourcePoint = value
+            cfg.display.anchorAdvanced = true
+            RefreshBar()
+          end
+        end,
+        order = 85.31,
+        width = 0.7,
+        hidden = function()
+          local cfg = GetSelectedConfig()
+          if GetSelectedConfig() == nil or not SupportsCDMGroupAnchor() or collapsedSections.groupAnchor then return true end
+          if not (cfg and cfg.display.anchorToGroup) then return true end
+          if cfg.display.anchorAdvanced then return false end
+          local src = cfg.display.anchorSourcePoint
+          local dst = cfg.display.anchorDestPoint
+          if not src or not dst then return true end
+          if (src == "BOTTOM" and dst == "TOP") or (src == "TOP" and dst == "BOTTOM")
+            or (src == "RIGHT" and dst == "LEFT") or (src == "LEFT" and dst == "RIGHT")
+            or (src == "CENTER" and dst == "CENTER") then return true end
+          return false
+        end
+      },
+      anchorDestPoint = {
+        type = "select",
+        name = "Group Point",
+        desc = "The point on the group that the bar attaches to.",
+        values = (ns.CDMGroupsAnchors and ns.CDMGroupsAnchors.ANCHOR_POINTS) or {
+          TOPLEFT="Top Left", TOP="Top", TOPRIGHT="Top Right",
+          LEFT="Left", CENTER="Center", RIGHT="Right",
+          BOTTOMLEFT="Bottom Left", BOTTOM="Bottom", BOTTOMRIGHT="Bottom Right",
+        },
+        sorting = (ns.CDMGroupsAnchors and ns.CDMGroupsAnchors.ANCHOR_POINTS_SORTED) or {
+          "TOPLEFT","TOP","TOPRIGHT","LEFT","CENTER","RIGHT","BOTTOMLEFT","BOTTOM","BOTTOMRIGHT",
+        },
+        get = function()
+          local cfg = GetSelectedConfig()
+          if not cfg then return "BOTTOM" end
+          if cfg.display.anchorDestPoint then return cfg.display.anchorDestPoint end
+          local legacy = { TOP="TOP", BOTTOM="BOTTOM", LEFT="LEFT", RIGHT="RIGHT" }
+          return legacy[cfg.display.anchorPoint or "BOTTOM"] or "BOTTOM"
+        end,
+        set = function(info, value)
+          local cfg = GetSelectedConfig()
+          if cfg then
+            cfg.display.anchorDestPoint = value
+            cfg.display.anchorAdvanced = true
+            RefreshBar()
+          end
+        end,
+        order = 85.32,
+        width = 0.7,
+        hidden = function()
+          local cfg = GetSelectedConfig()
+          if GetSelectedConfig() == nil or not SupportsCDMGroupAnchor() or collapsedSections.groupAnchor then return true end
+          if not (cfg and cfg.display.anchorToGroup) then return true end
+          if cfg.display.anchorAdvanced then return false end
+          local src = cfg.display.anchorSourcePoint
+          local dst = cfg.display.anchorDestPoint
+          if not src or not dst then return true end
+          if (src == "BOTTOM" and dst == "TOP") or (src == "TOP" and dst == "BOTTOM")
+            or (src == "RIGHT" and dst == "LEFT") or (src == "LEFT" and dst == "RIGHT")
+            or (src == "CENTER" and dst == "CENTER") then return true end
+          return false
+        end
+      },
       matchGroupWidth = {
         type = "toggle",
         name = "Match Size",
-        desc = "Automatically resize the bar to match the group container.\n\nTop/Bottom: matches container WIDTH\nLeft/Right: matches container HEIGHT",
+        desc = "Automatically resize the bar to match the group container.\n\nMatches the bar's primary axis: width for horizontal bars, height for vertical bars.",
         get = function()
           local cfg = GetSelectedConfig()
           return cfg and cfg.display.matchGroupWidth
@@ -11351,6 +11466,29 @@ function ns.AppearanceOptions.GetOptionsTable()
           end
         end,
         order = 85.45,
+        width = 1.1,
+        hidden = function()
+          local cfg = GetSelectedConfig()
+          return GetSelectedConfig() == nil or not SupportsCDMGroupAnchor() or collapsedSections.groupAnchor or not (cfg and cfg.display.anchorToGroup and cfg.display.matchGroupWidth)
+        end
+      },
+      matchWidthAdjustPct = {
+        type = "range",
+        name = "Size Adjust %",
+        desc = "Scale the matched size by a percentage. Applied before the pixel offset.\n\nRange: -100 (zero width) to +200 (triple size).",
+        min = -100, max = 200, step = 1,
+        get = function()
+          local cfg = GetSelectedConfig()
+          return cfg and cfg.display.matchWidthAdjustPct or 0
+        end,
+        set = function(info, value)
+          local cfg = GetSelectedConfig()
+          if cfg then
+            cfg.display.matchWidthAdjustPct = value
+            RefreshBar()
+          end
+        end,
+        order = 85.46,
         width = 1.1,
         hidden = function()
           local cfg = GetSelectedConfig()
