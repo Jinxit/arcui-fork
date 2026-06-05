@@ -39,6 +39,8 @@ This repo is managed by an autonomous agent fleet via the [agents](https://githu
 | `arcui-fixer` | Addresses review feedback | Dispatched by reviewer |
 | `arcui-loop-judge` | Detects stuck review loops | Dispatched by reviewer after 3+ rounds |
 
+The `agents` daemon source code is checked out locally at `~/code/agents` in WSL. Consult it when you need to understand how the fleet works — agent/skill/binding config, the webhook processor, runner container setup, auth (the runner has `gh` installed and `GH_TOKEN` mirrored from the repo-scoped `GITHUB_TOKEN`), or dispatch semantics. Fleet skills and agents are also managed via the `agents-fleet` MCP.
+
 ## Upstream Version Check
 
 The syncer agent checks upstream via the Wago Inertia API:
