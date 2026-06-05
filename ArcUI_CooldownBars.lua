@@ -1,4 +1,3 @@
--- ===================================================================
 -- ArcUI_CooldownBars.lua
 -- v3.0.1: Added charge count display for cooldown duration bars
 --   - Duration bars for charge spells now show currentText/maxText
@@ -5014,78 +5013,27 @@ function ns.CooldownBars.ApplyAppearance(spellID, barType)
     local group = ns.CDMGroups and ns.CDMGroups.groups and ns.CDMGroups.groups[display.anchorGroupName]
     if group and group.container then
       local container = group.container
-      local anchorPoint = display.anchorPoint or "BOTTOM"
-      local offsetX = display.anchorOffsetX or 0
-      local offsetY = display.anchorOffsetY or 0
-      
-      local effScale = container:GetEffectiveScale()
-      local isSideAnchor = (anchorPoint == "LEFT" or anchorPoint == "RIGHT")
+      local BGA = ns.BarGroupAlign
+      local sourcePoint, destPoint = BGA.GetAnchorPoints(display)
+      local forceSlots    = (barType == "charge")
+      local useMatchSlots = display.matchSlotsOnly or forceSlots
 
-      -- Compute barWidth first so anchor can center over slot area.
-      -- _slotAreaW is plain WoW units — no _pmult conversion needed.
-      local barWidth, barHeight
-      if display.matchGroupWidth then
-        local matchDimension
-        -- Charge bars: always use _slotArea dimensions so each slot aligns with an icon.
-        -- Using container dimensions (which include rawBase padding) makes the bar too tall/wide.
-        -- Non-charge bars: respect matchSlotsOnly toggle.
-        local forceSlots = (barType == "charge") and group._slotAreaW
-        if (display.matchSlotsOnly or forceSlots) and group._slotAreaW then
-          matchDimension = isSideAnchor and (group._slotAreaHRaw or group._slotAreaH) or (group._slotAreaWRaw or group._slotAreaW)
-        else
-          local cW, cH = container:GetWidth(), container:GetHeight()
-          matchDimension = isSideAnchor and cH or cW
-        end
-        if matchDimension and matchDimension > 0 then
-          local sizeAdjust = display.matchWidthAdjust or 0
-          barWidth = SnapToGroupPx(matchDimension + sizeAdjust)
-          if barType == "charge" then
-            barHeight = (display.frameHeight or 38) * scale
-          else
-            barHeight = display.height * scale
-          end
-          if isVertical then
-            frame:SetSize(barHeight, barWidth)
-          else
-            frame:SetSize(barWidth, barHeight)
-          end
-        end
+      local barHeight
+      if barType == "charge" then
+        barHeight = (display.frameHeight or 38) * scale
+      else
+        barHeight = display.height * scale
       end
 
-      -- Anchor: when matchGroupWidth is on, align bar to the icon area using
-      -- GetActualIconInset (X) and GetActualIconInsetY (Y) so slots land exactly
-      -- over the icon row/column. slotsContainer is at frame CENTER, so anchoring
-      -- frame BOTTOMLEFT at alignInset correctly centers slots over the icon area.
-      -- Non-matched bars fall back to simple container edge anchors.
-      local useInsetAnchor = display.matchGroupWidth and barWidth
-      local alignInset  = useInsetAnchor and GetActualIconInset(group) or 0
-      local alignInsetY = useInsetAnchor and GetActualIconInsetY(group) or 0
-      frame:ClearAllPoints()
-      if anchorPoint == "TOP" then
-        if useInsetAnchor then
-          frame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", alignInset + offsetX, offsetY)
-        else
-          frame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", offsetX, offsetY)
-        end
-      elseif anchorPoint == "BOTTOM" then
-        if useInsetAnchor then
-          frame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", alignInset + offsetX, offsetY)
-        else
-          frame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", offsetX, offsetY)
-        end
-      elseif anchorPoint == "LEFT" then
-        if useInsetAnchor then
-          frame:SetPoint("TOPRIGHT", container, "TOPLEFT", offsetX, -(alignInsetY + offsetY))
-        else
-          frame:SetPoint("RIGHT", container, "LEFT", offsetX, offsetY)
-        end
-      elseif anchorPoint == "RIGHT" then
-        if useInsetAnchor then
-          frame:SetPoint("TOPLEFT", container, "TOPRIGHT", offsetX, -(alignInsetY + offsetY))
-        else
-          frame:SetPoint("LEFT", container, "RIGHT", offsetX, offsetY)
-        end
-      end
+      local barWidth = BGA.ApplySizeAndAnchor(frame, display.anchorGroupName,
+          sourcePoint, destPoint,
+          barHeight,
+          display.anchorOffsetX or 0, display.anchorOffsetY or 0,
+          display.matchGroupWidth, useMatchSlots,
+          isVertical,
+          display.matchWidthAdjust or 0, display.matchWidthAdjustPct or 0,
+          isVertical, -- needsSwap: vertical bars swap SetSize
+          false) -- no matchIconEdges for cooldown bars
 
       if display.matchGroupWidth then
         if barWidth then
@@ -9074,73 +9022,27 @@ local function OnContainerSizeChangedForCooldownBars(container, width, height)
               local frame = barData.frame
               local scale = cfg.display.barScale or 1.0
               local isVertical = (cfg.display.barOrientation == "vertical")
-              local anchorPoint = cfg.display.anchorPoint or "BOTTOM"
-              local isSideAnchor = (anchorPoint == "LEFT" or anchorPoint == "RIGHT")
+              local BGA = ns.BarGroupAlign
+              local sourcePoint, destPoint = BGA.GetAnchorPoints(cfg.display)
+              local forceSlots    = (barInfo.type == "charge")
+              local useMatchSlots = cfg.display.matchSlotsOnly or forceSlots
 
-              local group = ns.CDMGroups and ns.CDMGroups.groups and ns.CDMGroups.groups[groupName]
-
-              local effScale = container:GetEffectiveScale()
-
-              -- matchSlotsOnly: _slotAreaW is plain WoW units — no _pmult needed.
-              -- Charge bars: always use _slotArea so slots align per icon (not container+padding).
-              local matchDimension
-              local forceSlots = (barInfo.type == "charge") and group and group._slotAreaW
-              if (cfg.display.matchSlotsOnly or forceSlots) and group and group._slotAreaW then
-                matchDimension = isSideAnchor and (group._slotAreaHRaw or group._slotAreaH) or (group._slotAreaWRaw or group._slotAreaW)
-              else
-                local cW, cH = container:GetWidth(), container:GetHeight()
-                matchDimension = isSideAnchor and cH or cW
-              end
-
-              local sizeAdjust = cfg.display.matchWidthAdjust or 0
-              local barWidth = SnapToGroupPx(matchDimension + sizeAdjust)
               local barHeight
-
               if barInfo.type == "charge" then
                 barHeight = (cfg.display.frameHeight or 38) * scale
               else
                 barHeight = cfg.display.height * scale
               end
 
-              -- Swap for vertical orientation (rotates the bar)
-              if isVertical then
-                frame:SetSize(barHeight, barWidth)
-              else
-                frame:SetSize(barWidth, barHeight)
-              end
-
-              -- Re-anchor frame using GetActualIconInset so slots align with icon area.
-              local offsetX = cfg.display.anchorOffsetX or 0
-              local offsetY = cfg.display.anchorOffsetY or 0
-              local useInsetAnchor = barWidth ~= nil
-              local alignInset  = useInsetAnchor and GetActualIconInset(group) or 0
-              local alignInsetY = useInsetAnchor and GetActualIconInsetY(group) or 0
-              frame:ClearAllPoints()
-              if anchorPoint == "TOP" then
-                if useInsetAnchor then
-                  frame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", alignInset + offsetX, offsetY)
-                else
-                  frame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", offsetX, offsetY)
-                end
-              elseif anchorPoint == "BOTTOM" then
-                if useInsetAnchor then
-                  frame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", alignInset + offsetX, offsetY)
-                else
-                  frame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", offsetX, offsetY)
-                end
-              elseif anchorPoint == "LEFT" then
-                if useInsetAnchor then
-                  frame:SetPoint("TOPRIGHT", container, "TOPLEFT", offsetX, -(alignInsetY + offsetY))
-                else
-                  frame:SetPoint("RIGHT", container, "LEFT", offsetX, offsetY)
-                end
-              elseif anchorPoint == "RIGHT" then
-                if useInsetAnchor then
-                  frame:SetPoint("TOPLEFT", container, "TOPRIGHT", offsetX, -(alignInsetY + offsetY))
-                else
-                  frame:SetPoint("LEFT", container, "RIGHT", offsetX, offsetY)
-                end
-              end
+              local barWidth = BGA.ApplySizeAndAnchor(frame, groupName,
+                  sourcePoint, destPoint,
+                  barHeight,
+                  cfg.display.anchorOffsetX or 0, cfg.display.anchorOffsetY or 0,
+                  cfg.display.matchGroupWidth, useMatchSlots,
+                  isVertical,
+                  cfg.display.matchWidthAdjust or 0, cfg.display.matchWidthAdjustPct or 0,
+                  isVertical, -- needsSwap
+                  false) -- no matchIconEdges for cooldown bars
               
               -- For charge bars: also resize the slots container and recreate slots
               if barInfo.type == "charge" and barData.slotsContainer then
