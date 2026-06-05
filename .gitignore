@@ -1,2 +1,6 @@
 .mcp.json
 .claude/
+
+# Machine-local agent-fleet config — never commit (local notes, LAN config, secrets)
+CLAUDE.local.md
+.env
