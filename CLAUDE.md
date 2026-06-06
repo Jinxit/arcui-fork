@@ -39,6 +39,22 @@ This repo is managed by an autonomous agent fleet via the [agents](https://githu
 | `arcui-fixer` | Addresses review feedback | Dispatched by reviewer |
 | `arcui-loop-judge` | Detects stuck review loops | Dispatched by reviewer after 3+ rounds |
 
+### Runner Image
+
+Fleet agents run inside a custom Docker image built from [`Jinxit/agents-runner`](https://github.com/Jinxit/agents-runner). It layers on top of the upstream [`ghcr.io/eloylp/agents-runner`](https://github.com/eloylp/agents) base image and adds:
+
+- **Lua 5.1 toolchain** (`lua5.1`, `luac`, `luacheck`) — WoW runs Lua 5.1, so `luac -p` matches the in-game parser exactly. `luacheck` should be configured with `std = "lua51"` in `.luacheckrc`.
+- **tweakcc** — patches the Claude Code binary to unlock the full model list in `/model`.
+- **wowless** — headless WoW client Lua/FrameXML interpreter for CI testing. Pre-built binary with TACT client data at `/opt/wowless/`. Invocation:
+  ```bash
+  /opt/wowless/wowless_wow run -p wow --addondir /path/to/addon
+  ```
+  The TACT data (live retail WoW interface files) is at `/opt/wowless/products/`. The WoW client build info is at `/opt/wowless/products/wow/WowlessData/build.lua`. The image is rebuilt daily to track the latest wowless HEAD and WoW client build.
+
+The image is published to `ghcr.io/jinxit/agents-runner` with immutable `sha-<shortsha>` tags. After each build, the fleet workspace runtime is automatically updated to the new tag. The base image digest is pinned in the Dockerfile for reproducibility; a base-image sync agent bumps it via PR when upstream advances.
+
+CI workflows that need wowless should pull the image and run it via `docker run`, mounting the repo as the addon directory. The runner image does NOT include Python — write matcher/harness scripts in bash, Lua, or Node.js, or run them on the GitHub Actions host outside the container.
+
 ## Upstream Version Check
 
 The syncer agent checks upstream via the Wago Inertia API:
