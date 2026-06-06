@@ -17,11 +17,18 @@ touches a `.lua` file:
    which contains a pre-built `wowless_wow` binary and live retail TACT data.
 2. Mounts the repo into the container and runs:
    ```
-   docker run --rm --workdir /opt/wowless \
+   docker run --rm --workdir /opt/wowless --user root \
      -v "$PWD:/addon" \
      ghcr.io/jinxit/agents-runner:latest \
-     /opt/wowless/wowless_wow run -p wow --addondir /addon
+     sh -lc 'mkdir -p /opt/wowless/build && \
+       ln -sfn /opt/wowless/products /opt/wowless/build/products && \
+       /opt/wowless/wowless_wow run -p wow --addondir /addon --lite'
    ```
+   The runner image stores product data in `/opt/wowless/products`; the
+   embedded wowless runner resolves it from `build/products` relative to its
+   working directory, so the symlink is created inside each ephemeral container.
+   `--lite` keeps wowless on the generated Lua product data path the image
+   ships, instead of the full sqlite-backed DB2 path.
 3. Captures stdout+stderr into `wowless-output.txt`.
 4. Reads the WoW client build from `/opt/wowless/products/wow/WowlessData/build.lua`.
 5. Runs `match-errors.py` (on the GH Actions host) against the captured
@@ -65,10 +72,12 @@ client build.  When the build number changes, **every** entry in
 2. **Run wowless locally against the addon.**
 
    ```bash
-   docker run --rm --workdir /opt/wowless \
+   docker run --rm --workdir /opt/wowless --user root \
      -v "$(pwd):/addon" \
      ghcr.io/jinxit/agents-runner:latest \
-     /opt/wowless/wowless_wow run -p wow --addondir /addon \
+     sh -lc 'mkdir -p /opt/wowless/build && \
+       ln -sfn /opt/wowless/products /opt/wowless/build/products && \
+       /opt/wowless/wowless_wow run -p wow --addondir /addon --lite' \
      > wowless-output.txt 2>&1
    ```
 

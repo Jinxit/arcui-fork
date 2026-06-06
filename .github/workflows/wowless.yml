@@ -41,23 +41,202 @@ jobs:
           echo "Wowless build info:"
           cat wowless-build.lua
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Bootstrap wowless schema database
+        run: |
+          python3 - <<'PY'
+          import sqlite3
+
+          conn = sqlite3.connect("wow_schema.sqlite3")
+          cur = conn.cursor()
+          cur.executescript("""
+          CREATE TABLE IF NOT EXISTS ChrSpecialization (
+            ID INTEGER,
+            ClassID INTEGER,
+            OrderIndex INTEGER,
+            Name_lang TEXT,
+            FemaleName_lang TEXT,
+            Description_lang TEXT,
+            SpellIconFileID INTEGER,
+            Role INTEGER,
+            MasterySpellID INTEGER,
+            ChrSpecializationID INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS ChrClasses (
+            ID INTEGER,
+            Name_lang TEXT,
+            Filename TEXT,
+            ClassName_lang TEXT,
+            DisplayName_lang TEXT,
+            IconFileDataID INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS ChrRaces (
+            ID INTEGER,
+            Name_lang TEXT,
+            ClientFileString TEXT,
+            Filename TEXT
+          );
+          CREATE TABLE IF NOT EXISTS InventorySlot (
+            ID INTEGER,
+            Name TEXT,
+            IconFileID INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS FileData (
+            ID INTEGER,
+            FileName TEXT,
+            FilePath TEXT
+          );
+          CREATE TABLE IF NOT EXISTS SkillLine (
+            ID INTEGER,
+            DisplayName_lang TEXT,
+            Flags INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS SkillLineXTraitTree (
+            SkillLineID INTEGER,
+            TraitTreeID INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS ItemSubclass (
+            ClassID INTEGER,
+            SubClassID INTEGER,
+            DisplayName_lang TEXT,
+            VerboseName_lang TEXT,
+            Flags INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS ItemClass (
+            ClassID INTEGER,
+            ID INTEGER,
+            ClassName_lang TEXT,
+            Name_lang TEXT
+          );
+          CREATE TABLE IF NOT EXISTS TraitNode (
+            ID INTEGER,
+            TraitTreeID INTEGER,
+            PosX INTEGER,
+            PosY INTEGER,
+            Type INTEGER,
+            Flags INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS TraitEdge (
+            ID INTEGER,
+            LeftTraitNodeID INTEGER,
+            RightTraitNodeID INTEGER,
+            Type INTEGER,
+            VisualStyle INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS TraitNodeXTraitCond (
+            ID INTEGER,
+            TraitNodeID INTEGER,
+            TraitCondID INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS TraitCond (
+            ID INTEGER,
+            TraitNodeID INTEGER,
+            TraitTreeID INTEGER,
+            Type INTEGER,
+            CondType INTEGER,
+            QuestID INTEGER,
+            AchievementID INTEGER,
+            SpecSetID INTEGER,
+            TraitNodeGroupID INTEGER,
+            TraitCurrencyID INTEGER,
+            SpentAmountRequired INTEGER,
+            Flags INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS TraitNodeGroupXTraitNode (
+            ID INTEGER,
+            TraitNodeGroupID INTEGER,
+            TraitNodeID INTEGER,
+            "Index" INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS TraitNodeGroup (
+            ID INTEGER,
+            Flags INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS TraitNodeGroupXTraitCond (
+            ID INTEGER,
+            TraitNodeGroupID INTEGER,
+            TraitCondID INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS SpecSetMember (
+            ID INTEGER,
+            SpecSetID INTEGER,
+            SpecSet INTEGER,
+            ChrSpecializationID INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS TraitNodeXTraitNodeEntry (
+            ID INTEGER,
+            TraitNodeID INTEGER,
+            TraitNodeEntryID INTEGER,
+            "Index" INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS TraitNodeEntry (
+            ID INTEGER,
+            TraitDefinitionID INTEGER,
+            MaxRanks INTEGER,
+            TraitSubTreeID INTEGER,
+            Type INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS UiTextureAtlasMember (
+            ID INTEGER,
+            UiTextureAtlasID INTEGER,
+            CommittedName TEXT,
+            Width INTEGER,
+            Height INTEGER,
+            LeftTexCoord REAL,
+            RightTexCoord REAL,
+            TopTexCoord REAL,
+            BottomTexCoord REAL,
+            CommittedLeft INTEGER,
+            CommittedRight INTEGER,
+            CommittedTop INTEGER,
+            CommittedBottom INTEGER,
+            CommittedFlags INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS UiTextureAtlas (
+            ID INTEGER,
+            FileDataID INTEGER,
+            Width INTEGER,
+            Height INTEGER,
+            AtlasWidth INTEGER,
+            AtlasHeight INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS UiTextureAtlasElement (
+            ID INTEGER,
+            UiTextureAtlasID INTEGER,
+            Name TEXT,
+            CommittedName TEXT,
+            Width INTEGER,
+            Height INTEGER,
+            LeftTexCoord REAL,
+            RightTexCoord REAL,
+            TopTexCoord REAL,
+            BottomTexCoord REAL
+          );
+          """)
+          conn.commit()
+          conn.close()
+          PY
+
       - name: Run wowless against addon
         # wowless exits 0 even when errors are present; use || true so the step
         # does not short-circuit.  The matcher step owns the pass/fail decision.
         run: |
           docker run --rm \
             --workdir /opt/wowless \
+            --user root \
             -v "${{ github.workspace }}:/addon" \
             ghcr.io/jinxit/agents-runner:latest \
-            /opt/wowless/wowless_wow run -p wow --addondir /addon \
+            sh -lc 'mkdir -p /opt/wowless/build && \
+              ln -sfn /opt/wowless/products /opt/wowless/build/products && \
+              cp /addon/wow_schema.sqlite3 /opt/wowless/build/wow_schema.sqlite3 && \
+              /opt/wowless/wowless_wow run -p wow --addondir /addon --lite' \
             > wowless-output.txt 2>&1 || true
           echo "--- wowless output ---"
           cat wowless-output.txt
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
 
       - name: Install matcher dependencies
         run: pip install pyyaml
