@@ -61,12 +61,12 @@ jobs:
           chmod 0777 "$wowless_out"
           docker run --rm \
             --workdir /opt/wowless \
-            -v "${{ github.workspace }}:/addon:ro" \
+            -v "${{ github.workspace }}:/opt/wowless/ArcUI:ro" \
             -v "$wowless_out:/opt/wowless/out" \
             ghcr.io/jinxit/agents-runner:latest \
             ./wowless_wow run -p wow \
               --addondir build/products/wow/WowlessData \
-              --addondir /addon \
+              --addondir /opt/wowless/ArcUI \
             > wowless-output.txt 2>&1 || true
           echo "::group::Wowless output (last 200 lines)"
           tail -200 wowless-output.txt
@@ -85,7 +85,7 @@ jobs:
             --output        wowless-output.txt \
             --build-lua     wowless-build.lua \
             --baseline      tools/wowless-ci/accepted-errors.yaml \
-            --addon-mount   /addon
+            --addon-mount   /opt/wowless/ArcUI
 
   # ---------------------------------------------------------------------------
   # Job 2: Static analysis with luacheck (WoW-API-aware config).
