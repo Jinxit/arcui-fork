@@ -33,7 +33,9 @@ jobs:
 
       - name: Extract wowless build info
         run: |
-          docker run --rm ghcr.io/jinxit/agents-runner:latest \
+          docker run --rm \
+            --workdir /opt/wowless \
+            ghcr.io/jinxit/agents-runner:latest \
             cat /opt/wowless/products/wow/WowlessData/build.lua \
             > wowless-build.lua
           echo "Wowless build info:"
@@ -86,4 +88,4 @@ jobs:
           sudo luarocks install luacheck
 
       - name: Run luacheck
-        run: luacheck tools/wowless-ci/ArcUI_ForkTest.lua --config .luacheckrc
+        run: luacheck . --config .luacheckrc
