@@ -57,9 +57,12 @@ jobs:
         # wowless exits 0 even when errors are present; use || true so the
         # step does not short-circuit.  The matcher step owns pass/fail.
         run: |
+          wowless_out="$(mktemp -d "${RUNNER_TEMP:-/tmp}/wowless-out.XXXXXX")"
+          chmod 0777 "$wowless_out"
           docker run --rm \
             --workdir /opt/wowless \
             -v "${{ github.workspace }}:/addon:ro" \
+            -v "$wowless_out:/opt/wowless/out" \
             ghcr.io/jinxit/agents-runner:latest \
             ./wowless_wow run -p wow \
               --addondir build/products/wow/WowlessData \
