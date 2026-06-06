@@ -19,11 +19,12 @@ touches `.lua`, `.xml`, or `.toc` files:
 2. Mounts the repo into the container and runs:
    ```
    docker run --rm --workdir /opt/wowless \
-     -v "$PWD:/addon:ro" \
+     -v "$PWD:/opt/wowless/ArcUI:ro" \
+     -v "$RUNNER_TEMP/wowless-out:/opt/wowless/out" \
      ghcr.io/jinxit/agents-runner:latest \
      ./wowless_wow run -p wow \
        --addondir build/products/wow/WowlessData \
-       --addondir /addon
+       --addondir /opt/wowless/ArcUI
    ```
    The `--workdir /opt/wowless` is required because wowless resolves all
    runtime data via hardcoded `build/...` paths relative to CWD.
@@ -72,12 +73,15 @@ client build.  When the build number changes, **every** entry in
 2. **Run wowless locally against the addon.**
 
    ```bash
+   wowless_out="$(mktemp -d "${RUNNER_TEMP:-/tmp}/wowless-out.XXXXXX")"
+   chmod 0777 "$wowless_out"
    docker run --rm --workdir /opt/wowless \
-     -v "$(pwd):/addon:ro" \
+     -v "$(pwd):/opt/wowless/ArcUI:ro" \
+     -v "$wowless_out:/opt/wowless/out" \
      ghcr.io/jinxit/agents-runner:latest \
      ./wowless_wow run -p wow \
        --addondir build/products/wow/WowlessData \
-       --addondir /addon \
+       --addondir /opt/wowless/ArcUI \
      > wowless-output.txt 2>&1
    ```
 
@@ -96,7 +100,7 @@ client build.  When the build number changes, **every** entry in
      --output wowless-output.txt \
      --build-lua wowless-build.lua \
      --baseline tools/wowless-ci/accepted-errors.yaml \
-     --addon-mount /addon
+     --addon-mount /opt/wowless/ArcUI
    ```
 
 5. **For each stale entry that still reproduces:** update `acceptedOnBuild`
