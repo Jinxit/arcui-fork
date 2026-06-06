@@ -17,7 +17,10 @@ touches a `.lua` file:
    which contains a pre-built `wowless_wow` binary and live retail TACT data.
 2. Mounts the repo into the container and runs:
    ```
-   /opt/wowless/wowless_wow run -p wow --addondir /addon
+   docker run --rm --workdir /opt/wowless \
+     -v "$PWD:/addon" \
+     ghcr.io/jinxit/agents-runner:latest \
+     /opt/wowless/wowless_wow run -p wow --addondir /addon
    ```
 3. Captures stdout+stderr into `wowless-output.txt`.
 4. Reads the WoW client build from `/opt/wowless/products/wow/WowlessData/build.lua`.
@@ -62,7 +65,7 @@ client build.  When the build number changes, **every** entry in
 2. **Run wowless locally against the addon.**
 
    ```bash
-   docker run --rm \
+   docker run --rm --workdir /opt/wowless \
      -v "$(pwd):/addon" \
      ghcr.io/jinxit/agents-runner:latest \
      /opt/wowless/wowless_wow run -p wow --addondir /addon \

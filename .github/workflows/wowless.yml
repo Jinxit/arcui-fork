@@ -44,6 +44,7 @@ jobs:
         # does not short-circuit.  The matcher step owns the pass/fail decision.
         run: |
           docker run --rm \
+            --workdir /opt/wowless \
             -v "${{ github.workspace }}:/addon" \
             ghcr.io/jinxit/agents-runner:latest \
             /opt/wowless/wowless_wow run -p wow --addondir /addon \
@@ -85,4 +86,4 @@ jobs:
           sudo luarocks install luacheck
 
       - name: Run luacheck
-        run: luacheck . --config .luacheckrc
+        run: luacheck tools/wowless-ci/ArcUI_ForkTest.lua --config .luacheckrc

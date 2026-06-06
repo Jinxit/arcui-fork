@@ -6,7 +6,7 @@
 --   ARCTEST_OK            — all assertions passed
 --   ARCTEST_FAIL <reason> — an assertion failed
 
-local ADDON, ns = ...
+local _, ns = ...
 
 -- No-op outside wowless.
 if not _G.WowlessData then return end

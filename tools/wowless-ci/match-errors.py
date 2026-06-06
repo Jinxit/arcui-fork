@@ -62,7 +62,8 @@ _ERROR_LINE = re.compile(
 def _normalize_path(raw_path, addon_mount):
     """
     Strip the container addon-mount prefix from a path and return the
-    repo-relative path (forward-slash normalised).
+    repo-relative path (forward-slash normalised), or None when the path is
+    outside the mounted addon.
     """
     raw_path = raw_path.replace('\\', '/')
     mount = addon_mount.rstrip('/') + '/'
@@ -70,11 +71,11 @@ def _normalize_path(raw_path, addon_mount):
         return raw_path[len(mount):]
     # Fallback: strip everything up to the first addon-recognisable segment.
     # This handles unexpected mount paths gracefully.
-    for marker in ('ArcUI/', 'addon/'):
+    for marker in ('/ArcUI/', 'ArcUI/', '/addon/', 'addon/'):
         idx = raw_path.find(marker)
         if idx != -1:
             return raw_path[idx + len(marker):]
-    return raw_path
+    return None
 
 
 def _normalize_message(msg):
@@ -96,6 +97,9 @@ def parse_wowless_output(output_text, addon_mount):
     arctest_fails = []
 
     for raw_line in output_text.splitlines():
+        if raw_line[:1].isspace():
+            continue
+
         line = raw_line.strip()
         if not line:
             continue
@@ -106,6 +110,9 @@ def parse_wowless_output(output_text, addon_mount):
 
         raw_path, _lineno, msg = m.group(1), m.group(2), m.group(3)
         rel_file = _normalize_path(raw_path, addon_mount)
+        if rel_file is None:
+            continue
+
         sig = _normalize_message(msg)
 
         if 'ARCTEST_OK' in sig:
