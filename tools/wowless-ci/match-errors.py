@@ -48,14 +48,14 @@ def parse_build_lua(path):
 
 # Matches an error line produced by wowless.
 # Formats seen in practice:
-#   [TIMESTAMP] /mount/path/to/File.lua:LINE: message
+#   [TIMESTAMP] error: /mount/path/to/File.lua:LINE: message
+#   [TIMESTAMP] error: \mount\path\to\File.lua:LINE: message
 #   /mount/path/to/File.lua:LINE: message
 _ERROR_LINE = re.compile(
-    r'^(?:\[\d+\]\s*)?'          # optional [timestamp]
-    r'((?:[^\s\[\]]+[/\\])?'     # optional directory prefix
-    r'[A-Za-z_][^/\\\s:]*\.lua)' # lua filename (no spaces)
-    r':(\d+):\s*'                # :LINE:
-    r'(.+)$'                     # message
+    r'^(?:(\[\d+(?:\.\d+)?\]\s*error:)\s*)?'  # optional [timestamp] error:
+    r'(.+?\.lua)'                              # lua path
+    r':(\d+):\s*'                              # :LINE:
+    r'(.+)$'                                   # message
 )
 
 
@@ -95,6 +95,11 @@ def parse_wowless_output(output_text, addon_mount):
     observed = set()
     arctest_ok = False
     arctest_fails = []
+    stack_trace_prefixes = (
+        'in function',
+        'in main chunk',
+        '(tail call)',
+    )
 
     for raw_line in output_text.splitlines():
         if raw_line[:1].isspace():
@@ -108,7 +113,10 @@ def parse_wowless_output(output_text, addon_mount):
         if not m:
             continue
 
-        raw_path, _lineno, msg = m.group(1), m.group(2), m.group(3)
+        error_prefix, raw_path, _lineno, msg = m.group(1), m.group(2), m.group(3), m.group(4)
+        if not error_prefix and msg.startswith(stack_trace_prefixes):
+            continue
+
         rel_file = _normalize_path(raw_path, addon_mount)
         if rel_file is None:
             continue
