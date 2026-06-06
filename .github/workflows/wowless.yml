@@ -1,0 +1,104 @@
+name: Wowless CI + luacheck
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.lua'
+      - '**.xml'
+      - '**.toc'
+      - 'tools/wowless-ci/**'
+      - '.luacheckrc'
+      - '.github/workflows/wowless.yml'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Run ArcUI under the wowless headless WoW interpreter and verify
+  # that the observed error set exactly matches the accepted-errors baseline.
+  #
+  # The wowless binary and runtime data (sqlite databases, TACT client data,
+  # FrameXML extracts) are pre-built in the fleet runner image.  This job
+  # pulls and runs that image — it does NOT build wowless from source.
+  #
+  # The binary resolves all data via hardcoded build/... paths relative to CWD,
+  # so the container runs with --workdir /opt/wowless where the build/ tree is
+  # installed.
+  # ---------------------------------------------------------------------------
+  wowless-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull runner image
+        run: docker pull ghcr.io/jinxit/agents-runner:latest
+
+      - name: Extract wowless build info
+        run: |
+          docker run --rm \
+            ghcr.io/jinxit/agents-runner:latest \
+            cat /opt/wowless/products/wow/WowlessData/build.lua \
+            > wowless-build.lua
+          echo "::group::Wowless build info"
+          cat wowless-build.lua
+          echo "::endgroup::"
+
+      - name: Run wowless against addon
+        # wowless exits 0 even when errors are present; use || true so the
+        # step does not short-circuit.  The matcher step owns pass/fail.
+        run: |
+          docker run --rm \
+            --workdir /opt/wowless \
+            -v "${{ github.workspace }}:/addon:ro" \
+            ghcr.io/jinxit/agents-runner:latest \
+            ./wowless_wow run -p wow \
+              --addondir build/products/wow/WowlessData \
+              --addondir /addon \
+            > wowless-output.txt 2>&1 || true
+          echo "::group::Wowless output (last 200 lines)"
+          tail -200 wowless-output.txt
+          echo "::endgroup::"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install matcher dependencies
+        run: pip install pyyaml
+
+      - name: Run error matcher
+        run: |
+          python3 tools/wowless-ci/match-errors.py \
+            --output        wowless-output.txt \
+            --build-lua     wowless-build.lua \
+            --baseline      tools/wowless-ci/accepted-errors.yaml \
+            --addon-mount   /addon
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Static analysis with luacheck (WoW-API-aware config).
+  # Runs in parallel with the wowless job; no Docker needed.
+  # ---------------------------------------------------------------------------
+  luacheck:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install luacheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y lua5.1 luarocks
+          sudo luarocks install luacheck
+
+      - name: Run luacheck
+        run: luacheck . --config .luacheckrc
