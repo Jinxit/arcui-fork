@@ -126,3 +126,6 @@ CDM_Module\CDM_Enhance\ArcUI_SpellUsabilityOptions.lua
 
 # [FORK] Bar styling - mask textures and texture borders
 ArcUI_ForkStyling.lua
+
+# [FORK] CI test harness - positive assertions for wowless (appended last, never conflicts)
+ArcUI_ForkTest.lua

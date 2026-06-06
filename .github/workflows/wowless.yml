@@ -1,0 +1,108 @@
+name: Wowless runtime tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['**.lua']
+
+jobs:
+  wowless:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90   # cold build (vcpkg + TACT WoW data download) ~45 min
+
+    steps:
+      - name: Checkout ArcUI
+        uses: actions/checkout@v4
+        with:
+          path: arcui
+
+      # ── resolve wowless HEAD SHA (used as build-cache key) ──────────────────
+      # We never pin wowless to a fixed commit — always run latest.
+
+      - name: Get wowless HEAD SHA
+        id: wowless-ref
+        run: |
+          sha=$(git ls-remote https://github.com/wowless/wowless.git HEAD | cut -f1)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      # ── aggressive cache ─────────────────────────────────────────────────────
+      # Key on wowless SHA: a wowless source change busts the cache; an
+      # unchanged run restores source + binary + vcpkg + TACT product data.
+      # TACT always runs during bin/run.sh and handles incremental WoW updates,
+      # so stale products are brought up-to-date cheaply on a cache hit.
+
+      - name: Restore wowless cache
+        id: wowless-cache
+        uses: actions/cache@v4
+        with:
+          path: wowless
+          key: wowless-${{ steps.wowless-ref.outputs.sha }}-${{ runner.os }}
+
+      # ── build wowless (only on cache miss) ──────────────────────────────────
+
+      - name: Install build dependencies
+        if: steps.wowless-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            build-essential cmake ninja-build git curl zip unzip tar pkg-config
+
+      - name: Clone and build wowless
+        if: steps.wowless-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/wowless/wowless.git wowless
+          cd wowless
+          git submodule update --init --depth 1
+          cmake --preset default
+          cmake --build build --parallel "$(nproc)"
+
+      # ── stage ArcUI addon files (lua/xml/toc; skip heavy media) ─────────────
+
+      - name: Stage ArcUI addon
+        run: |
+          mkdir -p wowless/addons/ArcUI
+          rsync -a \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='tools/' \
+            --exclude='Textures/' \
+            --exclude='Sounds/' \
+            --exclude='CustomTextures/' \
+            --exclude='docs/' \
+            arcui/ wowless/addons/ArcUI/
+
+      # ── run wowless ──────────────────────────────────────────────────────────
+      # wowless exits 0 even when Lua errors are present; the pass/fail signal
+      # comes from matcher.py comparing observed vs accepted errors.
+
+      - name: Run wowless
+        run: |
+          cd wowless
+          bin/run.sh wow \
+            --addondir "${{ github.workspace }}/wowless/addons" \
+            2>&1 | tee "${{ github.workspace }}/wowless-output.txt" || true
+
+      # ── error matcher ────────────────────────────────────────────────────────
+
+      - name: Install Python deps
+        run: pip install pyyaml
+
+      - name: Run error matcher
+        run: |
+          python3 arcui/tools/wowless-ci/matcher.py \
+            --output   "${{ github.workspace }}/wowless-output.txt" \
+            --baseline arcui/tools/wowless-ci/accepted-errors.yaml \
+            --build-lua \
+              "${{ github.workspace }}/wowless/build/products/wow/WowlessData/build.lua" \
+            --addon-root \
+              "${{ github.workspace }}/wowless/addons/ArcUI"
+
+      # ── always upload output for post-failure inspection ─────────────────────
+
+      - name: Upload wowless output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wowless-output
+          path: wowless-output.txt
+          retention-days: 7

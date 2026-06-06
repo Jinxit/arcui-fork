@@ -1,4 +1,4 @@
-name: Lua Syntax Check
+name: Lua checks
 
 on:
   pull_request:
@@ -6,6 +6,7 @@ on:
     paths: ['**.lua']
 
 jobs:
+  # Fast pre-check: pure syntax (luac -p catches parse errors in milliseconds).
   luac-check:
     runs-on: ubuntu-latest
     steps:
@@ -23,3 +24,23 @@ jobs:
             fi
           done < <(find . -name '*.lua' -not -path './.git/*')
           exit $failed
+
+  # Static analysis with WoW-API-aware luacheck.
+  luacheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install luacheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.1 luarocks
+          sudo luarocks install luacheck
+
+      - name: Run luacheck
+        run: |
+          luacheck . \
+            --config .luacheckrc \
+            --exclude-files 'Libs/**' \
+            --no-cache \
+            --formatter plain
