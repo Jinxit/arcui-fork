@@ -11,7 +11,7 @@
 -- Do NOT assert on known-broken paths (C_Traits.GetNodeInfo, minimap SetText)
 -- — those are accepted wowless gaps recorded in tools/wowless-ci/accepted-errors.yaml.
 
-local ADDON, ns = ...
+local _, ns = ...
 
 local function fail(msg)
     error("ARCTEST_FAIL: " .. tostring(msg))

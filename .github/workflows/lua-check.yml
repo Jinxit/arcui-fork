@@ -37,10 +37,22 @@ jobs:
           sudo apt-get install -y lua5.1 luarocks
           sudo luarocks install luacheck
 
+      - name: Collect changed Lua files
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+          git diff --name-only --diff-filter=ACMRT \
+            "${{ github.event.pull_request.base.sha }}" HEAD \
+            -- '*.lua' \
+            | grep -v '^Libs/' > /tmp/luacheck-files || true
+
       - name: Run luacheck
         run: |
-          luacheck . \
+          if [ ! -s /tmp/luacheck-files ]; then
+            echo "No changed Lua files to lint."
+            exit 0
+          fi
+          mapfile -t lua_files < /tmp/luacheck-files
+          luacheck "${lua_files[@]}" \
             --config .luacheckrc \
-            --exclude-files 'Libs/**' \
             --no-cache \
             --formatter plain
