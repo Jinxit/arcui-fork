@@ -25,7 +25,7 @@
   upstreamRef: ""
 
 - file: ArcUI_Minimap.lua
-  signature: "SetText (number expected, got no value)"
+  signature: "bad argument #2 to 'SetText' (number expected, got no value)"
   category: wowless-bug
   acceptedOnBuild: "67823"
   acceptedOnVersion: "12.0.5"
@@ -33,27 +33,3 @@
     wowless's FontString/Font API is not fully implemented. Our tooltip
     SetText call is correct per the GameTooltip API.
   upstreamRef: "https://github.com/wowless/wowless/issues/597"
-
-- file: ArcUI_CooldownReminder.lua
-  signature: "RegisterEvent unknown event PLAYER_EQUIPED_SPELLS_CHANGED"
-  category: addon-upstream-bug
-  acceptedOnBuild: "67823"
-  acceptedOnVersion: "12.0.5"
-  note: >
-    The event name is misspelled (PLAYER_EQUIPPED vs PLAYER_EQUIPED) and
-    inherited verbatim from upstream ArcUI. The event never fires in-game,
-    making the Healthstone/item-charge path off this handler dead code.
-    This is a real latent bug, not a harness artifact.
-    Follow-up: report/fix upstream.
-  upstreamRef: ""
-
-- file: CDM_Module/Arc_Auras/ArcUI_ArcAuras.lua
-  signature: "RegisterEvent unknown event PLAYER_EQUIPED_SPELLS_CHANGED"
-  category: addon-upstream-bug
-  acceptedOnBuild: "67823"
-  acceptedOnVersion: "12.0.5"
-  note: >
-    Same misspelled event as ArcUI_CooldownReminder.lua — both inherited
-    verbatim from upstream ArcUI. Never fires in-game.
-    Follow-up: report/fix upstream.
-  upstreamRef: ""
