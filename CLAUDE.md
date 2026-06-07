@@ -67,6 +67,8 @@ Current version is read from `## Version:` in `ArcUI.toc`. If the Wago API fails
 ## CI
 
 - **Lua syntax check** — `luac -p` on all `.lua` files for PRs to `main`
+- **Wowless test** — runs ArcUI under the headless wowless interpreter inside the fleet runner image; error matcher enforces a version-bound accepted-error baseline (see `tools/wowless-ci/`)
+- **luacheck** — static analysis with WoW-API-aware `.luacheckrc`, excludes `Libs/`
 - **Release workflow** — on merge to `main`, zips addon files and creates a GitHub Release for WowUp
 
 ## This Is a Fork
@@ -105,3 +107,17 @@ When writing custom features, always test in combat. A feature that works at a t
 - Never commit custom changes to the `upstream` branch.
 - When resolving merge conflicts between upstream and our patches, preserve our custom behavior while incorporating upstream improvements.
 - Keep custom changes minimal and well-documented.
+
+### Local development workflow
+
+- **Always `git fetch origin && git checkout -b <branch> origin/main`** before starting work. Never branch from a stale local `main`. The fleet agents push to `main` autonomously — your local copy is outdated the moment you look away.
+- **Never merge PRs from the CLI.** Always create a PR and let the user merge via GitHub. You are not authorized to merge.
+- **Never commit directly to `main`.** Every change goes through a branch and PR, no exceptions, no "it's just a small fix."
+
+### Agent-aware workflow
+
+This repo has autonomous agents that work on issues and PRs **between and during your turns**. Assume any PR or issue you looked at 5 minutes ago has changed.
+
+- **Before acting on a PR or issue, always re-read its current state** — comments, reviews, commits, CI status. Do not rely on what you read earlier in the conversation. The fleet may have pushed commits, posted reviews, or closed the PR while you were working.
+- **Before posting comments or triggering agents, check what's already happened.** A reviewer may have already reviewed. A fixer may have already pushed. Don't duplicate work or create loops.
+- **Draft PRs exist for a reason.** If a PR depends on upstream work (another repo's PR, an image rebuild), create it as a draft. The reviewer agent currently triggers on all `pull_request.opened` and `pull_request.synchronize` events including drafts — be aware of this.
