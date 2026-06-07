@@ -1,0 +1,35 @@
+# Accepted wowless errors — version-bound baseline.
+#
+# Each entry is valid only for the specified acceptedOnBuild number.
+# CI fails if:
+#   - An observed error has no matching entry here   (unexpected error)
+#   - An entry's acceptedOnBuild != the current WoW client build  (stale acceptance)
+#   - An entry's signature is absent from the observed output     (vanished acceptance)
+#
+# When CI fails because the build changed: re-run wowless locally, verify each
+# accepted error still reproduces, update acceptedOnBuild/acceptedOnVersion, commit.
+# See tools/wowless-ci/README.md for the full re-validation workflow.
+
+- file: ArcUI_CooldownBars.lua
+  signature: "bad argument #-1 to 'GetNodeInfo' (table expected, got nil)"
+  category: wowless-bug
+  acceptedOnBuild: "67823"
+  acceptedOnVersion: "12.0.5"
+  note: >
+    wowless's C_Traits.GetNodeInfo implementation is stale vs the current
+    TraitNodeInfo schema. It omits required non-nilable fields
+    (entryIDToRanksIncreased: table, isDisplayError, ranksIncreased,
+    totalMaxRanks). The output-structure coercion throws on the missing
+    table-typed field. Our call is correct per the live API.
+    Candidate for an upstream wowless fix.
+  upstreamRef: ""
+
+- file: ArcUI_Minimap.lua
+  signature: "bad argument #2 to 'SetText' (number expected, got no value)"
+  category: wowless-bug
+  acceptedOnBuild: "67823"
+  acceptedOnVersion: "12.0.5"
+  note: >
+    wowless's FontString/Font API is not fully implemented. Our tooltip
+    SetText call is correct per the GameTooltip API.
+  upstreamRef: "https://github.com/wowless/wowless/issues/597"
