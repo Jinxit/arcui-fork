@@ -113,6 +113,7 @@ When writing custom features, always test in combat. A feature that works at a t
 - **Always `git fetch origin && git checkout -b <branch> origin/main`** before starting work. Never branch from a stale local `main`. The fleet agents push to `main` autonomously — your local copy is outdated the moment you look away.
 - **Never merge PRs from the CLI.** Always create a PR and let the user merge via GitHub. You are not authorized to merge.
 - **Never commit directly to `main`.** Every change goes through a branch and PR, no exceptions, no "it's just a small fix."
+- **Never create a PR without explicit user approval.** Commit and push to a branch, then ask the user before running `gh pr create`. The user decides when and whether to open PRs.
 
 ### Agent-aware workflow
 
@@ -120,4 +121,4 @@ This repo has autonomous agents that work on issues and PRs **between and during
 
 - **Before acting on a PR or issue, always re-read its current state** — comments, reviews, commits, CI status. Do not rely on what you read earlier in the conversation. The fleet may have pushed commits, posted reviews, or closed the PR while you were working.
 - **Before posting comments or triggering agents, check what's already happened.** A reviewer may have already reviewed. A fixer may have already pushed. Don't duplicate work or create loops.
-- **Draft PRs exist for a reason.** If a PR depends on upstream work (another repo's PR, an image rebuild), create it as a draft. The reviewer agent currently triggers on all `pull_request.opened` and `pull_request.synchronize` events including drafts — be aware of this.
+- **Do not open PRs that depend on unmerged upstream work.** If a PR can't pass CI until another repo's PR is merged and deployed, don't create it yet — push to the branch and wait. Opening it prematurely wastes reviewer agent cycles on guaranteed failures.
