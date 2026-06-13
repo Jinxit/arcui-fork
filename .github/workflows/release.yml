@@ -1,0 +1,55 @@
+name: Create Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compose fork version
+        id: version
+        run: |
+          base=$(grep -oP '## Version:\s*\K\S+' ArcUI.toc)
+          hash=$(git rev-parse --short=7 HEAD)
+          full="${base}.${hash}"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "tag=v$full" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if this commit was already released
+        id: check
+        run: |
+          if gh release view "${{ steps.version.outputs.tag }}" &>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package addon
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          mkdir -p /tmp/release/ArcUI
+          rsync -a --exclude='.git' --exclude='.github' --exclude='docs' \
+                --exclude='.mcp.json' --exclude='.gitignore' . /tmp/release/ArcUI/
+          # Stamp the full fork version into the packaged TOC only (repo TOC stays at upstream base)
+          sed -i "s|^## Version:.*|## Version: ${{ steps.version.outputs.full }}|" /tmp/release/ArcUI/ArcUI.toc
+          cd /tmp/release
+          zip -r "/tmp/${{ steps.version.outputs.full }}.zip" ArcUI/
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "/tmp/${{ steps.version.outputs.full }}.zip" \
+            --title "ArcUI ${{ steps.version.outputs.full }}" \
+            --notes "Automated fork release ${{ steps.version.outputs.full }} (base ${{ steps.version.outputs.base }}, commit ${{ github.sha }})"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
