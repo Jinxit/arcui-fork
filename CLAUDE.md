@@ -25,7 +25,7 @@
 
 - **`main`** — our fork with custom patches applied. This is what gets released.
 - **`upstream`** — clean mirror of upstream CurseForge releases. Never has custom changes.
-- Upstream sync: new releases are imported to `upstream`, then PRd into `main`.
+- Upstream sync: new releases are imported to `upstream`, then merged into `main` via a `upstream-sync/X.Y.Z` branch and PR.
 
 ## Agent Fleet
 
@@ -33,7 +33,7 @@ This repo is managed by an autonomous agent fleet via the [agents](https://githu
 
 | Agent | Role | Trigger |
 |---|---|---|
-| `arcui-syncer` | Checks Wago hourly for new upstream versions, imports to `upstream` branch, opens PR to `main` | Cron `0 * * * *` |
+| `arcui-syncer` | Checks CurseForge twice daily for new upstream versions, imports to `upstream` branch, merges into `main` via sync branch PR | Cron `0 5,17 * * *` |
 | `arcui-coder` | Implements custom changes from issues | `ai ready` label |
 | `arcui-reviewer` | Reviews PRs for correctness | `pull_request.opened`, `pull_request.synchronize` |
 | `arcui-fixer` | Addresses review feedback | Dispatched by reviewer |
@@ -57,12 +57,11 @@ CI workflows that need wowless should pull the image and run it via `docker run`
 
 ## Upstream Version Check
 
-The syncer agent checks upstream via the Wago Inertia API:
+The syncer agent checks upstream via the CurseForge public API:
 ```
-GET https://addons.wago.io/addons/arcui/versions?stability=stable
-Headers: X-Inertia: true
+GET https://www.curseforge.com/api/v1/mods/1391614/files?pageSize=1
 ```
-Current version is read from `## Version:` in `ArcUI.toc`. If the Wago API fails, the run aborts — no fallback.
+Project ID `1391614` is ArcUI. The response is JSON with the latest file's `displayName` (e.g. `ArcUI-3.7.0.zip`) and `id` (used to construct the download URL). Current version is read from `## Version:` in `ArcUI.toc`. If the CurseForge API fails, the run aborts — no fallback.
 
 ## CI
 
