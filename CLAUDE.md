@@ -57,12 +57,11 @@ CI workflows that need wowless should pull the image and run it via `docker run`
 
 ## Upstream Version Check
 
-The syncer agent checks upstream via the Wago Inertia API:
+The syncer agent checks upstream via the CurseForge public API:
 ```
-GET https://addons.wago.io/addons/arcui/versions?stability=stable
-Headers: X-Inertia: true
+GET https://www.curseforge.com/api/v1/mods/1391614/files?pageSize=1
 ```
-Current version is read from `## Version:` in `ArcUI.toc`. If the Wago API fails, the run aborts — no fallback.
+Project ID `1391614` is ArcUI. The response is JSON with the latest file's `displayName` (e.g. `ArcUI-3.7.0.zip`) and `id` (used to construct the download URL). Current version is read from `## Version:` in `ArcUI.toc`. If the CurseForge API fails, the run aborts — no fallback.
 
 ## CI
 
