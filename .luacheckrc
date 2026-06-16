@@ -128,6 +128,7 @@ globals = {
   "GetMacroSpell",
   "GetPowerRegenForPowerType",
   "GetRuneCooldown",
+  "GetNumTotemSlots",
   "GetTotemDuration",
   "GetTotemInfo",
   "GetUnitChargedPowerPoints",
