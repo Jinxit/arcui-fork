@@ -10,7 +10,7 @@
 # accepted error still reproduces, update acceptedOnBuild/acceptedOnVersion, commit.
 # See tools/wowless-ci/README.md for the full re-validation workflow.
 
-- file: ArcUI_CooldownBars.lua
+- file: Bars/ArcUI_CooldownBars.lua
   signature: "bad argument #-1 to 'GetNodeInfo' (table expected, got nil)"
   category: wowless-bug
   acceptedOnBuild: "67823"
