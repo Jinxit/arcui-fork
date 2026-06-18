@@ -3478,24 +3478,55 @@ local function InstallCDMHooks()
                 -- When options panel is OPEN, _arcHiddenByBar is nil (cleared by ShowAllHiddenByBarOverlays)
                 -- so we also check ns._arcUIOptionsOpen to catch overlay-bearing frames.
                 if itemFrame._arcHiddenByBar or ns._arcUIOptionsOpen then
-                    -- Clear flags if set
-                    itemFrame._arcHiddenByBar = nil
-                    itemFrame._arcHiddenByBarCdID = nil
-                    -- Immediately hide overlay on this frame so it doesn't linger on wrong icon
-                    if ns.API and ns.API.HideOverlayOnFrame then
-                        ns.API.HideOverlayOnFrame(itemFrame)
+                    -- CDM's RefreshData re-calls SetCooldownID with each active frame's
+                    -- CURRENT cooldownID every refresh cycle (CooldownViewer.lua:
+                    -- RefreshData → itemFrame:SetCooldownID(cooldownID)). SetCooldownID's
+                    -- body no-ops on an unchanged id, but hooksecurefunc still fires THIS
+                    -- post-hook on every refresh (combat enter/leave, aura gain/loss,
+                    -- reload). If we simply cleared the bar-hide here, those routine
+                    -- refreshes would force-show the Blizzard frame (or drop its options
+                    -- overlay) until the next bar update re-hid it.
+                    --
+                    -- Distinguish via the hidden cooldownID Core tracks (mode-independent;
+                    -- works while options are open, where _arcHiddenByBar is nil):
+                    --   • SAME id  → no-op refresh of a still-hidden frame: RE-ASSERT the
+                    --     hide (Core restores hide vs show+overlay for the current mode).
+                    --   • DIFFERENT → genuine reshuffle onto a new cooldownID: release the
+                    --     hide and let RefreshHiddenCDMFrames re-find the frame now showing
+                    --     the hidden cooldownID. (cooldownIDs are non-secret CDM ids.)
+                    local hiddenCdID = ns.API and ns.API.GetCDMHiddenCooldownID
+                        and ns.API.GetCDMHiddenCooldownID(itemFrame)
+                    if hiddenCdID and cooldownID == hiddenCdID then
+                        if ns.API and ns.API.ReassertCDMHideForFrame then
+                            ns.API.ReassertCDMHideForFrame(itemFrame, cooldownID)
+                        end
+                    else
+                        -- Clear flags if set
+                        itemFrame._arcHiddenByBar = nil
+                        itemFrame._arcHiddenByBarCdID = nil
+                        -- Immediately hide overlay on this frame so it doesn't linger on wrong icon
+                        if ns.API and ns.API.HideOverlayOnFrame then
+                            ns.API.HideOverlayOnFrame(itemFrame)
+                        end
+                        -- Defer refresh: CDM assigns cooldownIDs sequentially during reshuffle,
+                        -- the new frame for the hidden cdID may not exist yet.
+                        if not state._pendingHiddenRefresh then
+                            state._pendingHiddenRefresh = true
+                            C_Timer.After(0.2, function()
+                                state._pendingHiddenRefresh = nil
+                                if ns.API and ns.API.RefreshHiddenCDMFrames then
+                                    ns.API.RefreshHiddenCDMFrames()
+                                end
+                            end)
+                        end
                     end
-                    -- Defer refresh: CDM assigns cooldownIDs sequentially during reshuffle,
-                    -- the new frame for the hidden cdID may not exist yet.
-                    if not state._pendingHiddenRefresh then
-                        state._pendingHiddenRefresh = true
-                        C_Timer.After(0.2, function()
-                            state._pendingHiddenRefresh = nil
-                            if ns.API and ns.API.RefreshHiddenCDMFrames then
-                                ns.API.RefreshHiddenCDMFrames()
-                            end
-                        end)
-                    end
+                elseif cooldownID and ns.API and ns.API.HideCDMFrameIfRequested then
+                    -- Fresh / never-hidden frame (e.g. CDM building buff icons at login or
+                    -- a buff reappearing on a new pool frame). If a bar has requested this
+                    -- cooldownID hidden, hide it in this same tick instead of waiting for
+                    -- the next bar update (combat/target) — the "not hidden until I
+                    -- right-clicked a mob" case. O(1) registry lookup, no-op otherwise.
+                    ns.API.HideCDMFrameIfRequested(itemFrame, cooldownID)
                 end
                 
                 -- ─── FAST-PATH PLACEMENT ─────────────────────────────────
