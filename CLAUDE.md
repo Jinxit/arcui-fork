@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**arcui-fork** is a private maintained fork of the [ArcUI](https://www.curseforge.com/wow/addons/arc-ui) World of Warcraft addon (retail). The fork carries persistent custom modifications while staying in sync with upstream releases from CurseForge/Wago.
+**arcui-fork** is a maintained fork of the [ArcUI](https://www.curseforge.com/wow/addons/arc-ui) World of Warcraft addon (retail). The fork carries persistent custom modifications while staying in sync with upstream releases from CurseForge.
 
 ## Codebase
 
