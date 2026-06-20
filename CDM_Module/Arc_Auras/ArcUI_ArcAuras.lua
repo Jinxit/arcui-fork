@@ -30,6 +30,28 @@ local Track = _G.ArcUIProfiler_Track
 local Shared = ns.CDMShared
 
 -- ═══════════════════════════════════════════════════════════════════════════
+-- CLICK-THROUGH REFRESH (debounced)
+-- Frames created AFTER the post-enable sweep — custom timers / custom icons
+-- added live, or spell frames (re)created on talent changes — would otherwise
+-- keep the default clickable state until the user opens and closes the options
+-- panel. Coalesce a single RefreshIconSettings sweep (the same one the panel
+-- triggers) so these frames inherit the saved click-through / tooltip state.
+-- Debounced so bulk creation collapses into one sweep.
+-- ═══════════════════════════════════════════════════════════════════════════
+local clickThroughRefreshPending = false
+local function RequestClickThroughRefresh()
+    if clickThroughRefreshPending then return end
+    if not (ns.CDMGroups and ns.CDMGroups.RefreshIconSettings) then return end
+    clickThroughRefreshPending = true
+    C_Timer.After(0.2, function()
+        clickThroughRefreshPending = false
+        if ns.CDMGroups and ns.CDMGroups.RefreshIconSettings then
+            ns.CDMGroups.RefreshIconSettings()
+        end
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
 -- CONSTANTS
 -- ═══════════════════════════════════════════════════════════════════════════
 
@@ -47,6 +69,7 @@ local ID_PREFIX = {
     ITEM = "arc_item_",
     SPELL = "arc_spell_",
     TIMER = "arc_timer_",
+    TOTEM = "arc_totem_",
 }
 
 -- Frame Strata/Level Constants - Standardized to match CDM icons
@@ -347,8 +370,12 @@ function ArcAuras.ParseArcID(arcID)
         local tail = arcID:sub(#ID_PREFIX.TIMER + 1)
         local spellID = tonumber(tail:match("^(%d+)"))
         return "timer", spellID
+    elseif arcID:find("^" .. ID_PREFIX.TOTEM) then
+        -- Totem IDs are "arc_totem_<slot>" — the trailing number is the totem slot.
+        local slot = tonumber(arcID:sub(#ID_PREFIX.TOTEM + 1))
+        return "totem", slot
     end
-    
+
     return nil
 end
 
@@ -578,15 +605,35 @@ local function GetStackDisplay(config, arcID)
             if stacks and stacks > 0 then
                 return stacks, true   -- isCharges=true so chargeText styling applies
             end
-            -- Idle (no stacks accumulated). If Track Stacks is enabled on
-            -- this timer, return 0 as a persistent placeholder so the
-            -- count is always visible — same way normal spell-charge text
-            -- always displays its current count. This makes the stack
-            -- text easy to find and style even before the first proc.
+            -- Stacks are at 0 (idle, or a consume pool emptied).
             local cfg = db.customTimers[arcID]
-            local trackStacks = cfg and cfg.startTrigger
-                and cfg.startTrigger.trackStacks == true
-            if trackStacks then
+            local st  = cfg and cfg.startTrigger
+            -- "Start full": while the timer is IDLE (not running), show the
+            -- configured Initial Stacks as a full pool (e.g. 2/2) instead of 0,
+            -- so the icon reads full before the first cast. Once the timer is
+            -- running, the real pool drives the number (so an emptied running
+            -- pool correctly shows 0, not full).
+            if st and st.startFull and st.trackStacks == true
+               and st.stackMode == "consume" then
+                local running = ns.ArcAurasTimer.IsTimerRunning
+                    and ns.ArcAurasTimer.IsTimerRunning(arcID)
+                if not running then
+                    local init = tonumber(st.initialStacks) or 0
+                    if init > 0 then return init, true end
+                end
+            end
+            -- Honor the chargeText "Hide at 0" toggle: suppress the text rather
+            -- than show a "0". Timer stacks are non-secret real numbers
+            -- (GetStackCount), so this 0-case is secret-safe — unlike item
+            -- charges, which are secret and must never be 0-tested.
+            local tSettings = ArcAuras.GetCachedSettings and ArcAuras.GetCachedSettings(arcID)
+            if tSettings and tSettings.chargeText and tSettings.chargeText.hideAtZero then
+                return nil, false
+            end
+            -- Otherwise, if Track Stacks is enabled, show 0 as a persistent
+            -- placeholder so the count is always visible/stylable before the
+            -- first proc.
+            if st and st.trackStacks == true then
                 return 0, true
             end
             return nil, false
@@ -832,7 +879,7 @@ local function CreateArcAuraFrame(arcID, config)
     --   SetCooldownFromDurationObject(durObj) → frame shown → IsShown()=true → desat ON
     --   OnCooldownDone fires → CD expired → desat OFF instantly
     -- ═══════════════════════════════════════════════════════════════════════════
-    if config.type == "spell" or config.type == "timer" then
+    if config.type == "spell" or config.type == "timer" or config.type == "totem" then
         frame._arcIsSpellCooldown = true  -- Flag: OnUpdate loop skips this frame
         frame._arcSpellID = config.spellID
         
@@ -1146,6 +1193,12 @@ function ArcAuras.CreateFrame(arcID, config)
     
     -- Initialize stack cache for this frame
     InvalidateStackCache(arcID)
+    
+    -- Apply current click-through / tooltip state to this frame. Covers frames
+    -- created outside the post-enable sweep (live-added custom timers/icons,
+    -- talent-change spell frames). Debounced — Enable's bulk creation collapses
+    -- to one sweep and is also covered explicitly by the post-enable sweep.
+    RequestClickThroughRefresh()
     
     return frame
 end
@@ -1680,6 +1733,12 @@ end
 
 -- Called only when isOnCooldown flips. Updates desat/alpha/tint/glow for cooldown state.
 local function ApplyCooldownStateVisuals(frame, arcID, isOnCooldown)
+    -- DURATION OVERRIDE: while active on this Arc item/trinket frame, the override
+    -- owns the whole visual (treated as an aura override). Delegate and stop.
+    if frame._arcDurOvActive and ns.DurationOverride and ns.DurationOverride.ApplyVisuals then
+        ns.DurationOverride.ApplyVisuals(frame)
+        return
+    end
     local sv, settings = GetCachedStateVisuals(frame, arcID)
     local csv = settings and settings.cooldownStateVisuals or {}
     local rs = csv.readyState or {}
@@ -3784,6 +3843,18 @@ function ArcAuras.Enable()
                 end
             end
         end
+        
+        -- ═══════════════════════════════════════════════════════════════════════
+        -- APPLY CLICK-THROUGH / TOOLTIP STATE
+        -- All Arc Aura frames (items, trinkets, spells, timers, custom icons) are
+        -- now created and registered with CDMGroups. Run the same RefreshIconSettings
+        -- sweep that opening the options panel triggers, so the saved click-through
+        -- and tooltip settings actually apply at login/enable instead of only after
+        -- the user opens and closes the panel.
+        -- ═══════════════════════════════════════════════════════════════════════
+        if ns.CDMGroups.RefreshIconSettings then
+            ns.CDMGroups.RefreshIconSettings()
+        end
     end)
 end
 
@@ -5198,6 +5269,41 @@ end
 eventFrame:SetScript("OnEvent", Track and Track("ArcAuras.OnEvent", _arcAurasOnEvent) or _arcAurasOnEvent)
 
 -- ═══════════════════════════════════════════════════════════════════════════
+-- READY GLOW RE-EVAL ON GROUP SHOW
+--
+-- "Show only in combat" groups hide via container ALPHA (SafeShowContainer), not
+-- :Hide() — so child item/trinket frames keep IsShown()==true the whole time; only
+-- the container alpha and the _arcGroupHidden flag change. The item ready-glow check
+-- only (re)starts a glow on a ready/cooldown STATE change, so a trinket that was
+-- already off cooldown while its group was faded out never starts its "glow when
+-- ready" when the group fades back in on combat entry — it just sat dark until some
+-- unrelated cooldown event happened to re-evaluate it (the reported "trinket glow
+-- doesn't appear until ~20s into combat" bug).
+--
+-- UpdateGroupVisibility is the authoritative group shown/hidden signal. This
+-- post-hook runs AFTER SafeShowContainer has set the final container alpha and
+-- cleared _arcGroupHidden, so the frame is genuinely visible now — re-run the normal
+-- visual pass on each now-visible item frame. UpdateArcItemFrame starts the ready
+-- glow when it should show and isn't already showing (idempotent: glow start is
+-- gated on "not currently showing", so no churn if it's already up; group-hidden
+-- frames are skipped so we never start a glow behind a faded-out container).
+-- Spell frames are handled by ArcAurasCooldown's own combat handler.
+-- ═══════════════════════════════════════════════════════════════════════════
+if ns.CDMGroups and ns.CDMGroups.UpdateGroupVisibility then
+    hooksecurefunc(ns.CDMGroups, "UpdateGroupVisibility", function()
+        if not ArcAuras.isEnabled then return end
+        for arcID, frame in pairs(ArcAuras.frames) do
+            if frame and not frame._arcIsSpellCooldown and frame:IsShown() then
+                local parent = frame:GetParent()
+                if not (frame._arcGroupHidden or (parent and parent._arcGroupHidden)) then
+                    UpdateArcItemFrame(frame, arcID)
+                end
+            end
+        end
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
 -- SLASH COMMANDS
 -- ═══════════════════════════════════════════════════════════════════════════
 
@@ -5322,17 +5428,26 @@ function ArcAuras.CreateCatalogEntry(cdID, frame)
             icon = timerCfg.icon
         end
         name = (name or ("Spell " .. spellID)) .. " |cff888888(Timer)|r"
+    elseif arcType == "totem" and id then
+        -- Totem-slot frame. The live totem icon is a SECRET fileID (we SetTexture
+        -- it from GetTotemInfo), so the catalog must NOT read the frame's texture
+        -- — it always uses a stable placeholder + "Totem Slot N" label.
+        name = "Totem Slot " .. id .. " |cff888888(Totem)|r"
+        icon = 310731  -- totem glyph placeholder (matches ArcAurasTotems.PLACEHOLDER_ICON)
     end
-    
+
     -- Fallback to frame data if available
     if frame then
         if frame._currentItemName and frame._currentItemName ~= "" then
-            -- Don't clobber the timer suffix
-            if arcType ~= "timer" then name = frame._currentItemName end
+            -- Don't clobber the timer/totem suffix
+            if arcType ~= "timer" and arcType ~= "totem" then name = frame._currentItemName end
         end
-        if frame.Icon and frame.Icon.GetTexture then
+        -- Skip the live frame icon for totems (secret) and guard every type
+        -- against a secret texture value — comparing a secret number throws.
+        if arcType ~= "totem" and frame.Icon and frame.Icon.GetTexture then
             local frameIcon = frame.Icon:GetTexture()
-            if frameIcon and frameIcon ~= 134400 then
+            if frameIcon and not (issecretvalue and issecretvalue(frameIcon))
+               and frameIcon ~= 134400 then
                 icon = icon or frameIcon
             end
         end
