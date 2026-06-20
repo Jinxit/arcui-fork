@@ -47,7 +47,7 @@ jobs:
         run: |
           docker run --rm \
             ghcr.io/jinxit/agents-runner:latest \
-            cat /opt/wowless/products/wow/WowlessData/build.lua \
+            cat /opt/wowless/build/products/wow/WowlessData/build.lua \
             > wowless-build.lua
           echo "::group::Wowless build info"
           cat wowless-build.lua

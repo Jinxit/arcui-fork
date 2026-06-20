@@ -104,6 +104,8 @@ globals = {
   "UnitPowerBarID",
   "UnitPowerPercent",
   "UnitStagger",
+  "UnitCastingInfo",
+  "UnitChannelInfo",
 
   -- Spell / cooldown API
   "GetSpellInfo",
@@ -128,8 +130,11 @@ globals = {
   "GetMacroSpell",
   "GetPowerRegenForPowerType",
   "GetRuneCooldown",
+  "GetNumTotemSlots",
   "GetTotemDuration",
   "GetTotemInfo",
+  "GetUnitEmpowerHoldAtMaxTime",
+  "GetUnitEmpowerStageDuration",
   "GetUnitChargedPowerPoints",
   "HasAction",
 
@@ -209,10 +214,13 @@ globals = {
   "STANDARD_TEXT_FONT",
   "Settings",
   "ToggleEditModeManager",
+  "UISpecialFrames",
+  "PlayerCastingBarFrame",
 
   -- Cooldown frame
   "CooldownFrame_Set",
   "CooldownFrame_Clear",
+  "SetDesaturation",
   "AbbreviateNumbers",
   "ActionButtonSpellAlertManager",
   "AssistedCombatManager",
@@ -243,6 +251,7 @@ globals = {
 
   -- String / format helpers in WoW
   "format",
+  "C_StringUtil",
   "strsplit",
   "strjoin",
   "strtrim",
@@ -305,6 +314,7 @@ globals = {
   "IsInGroup",
   "IsInRaid",
   "GetNumGroupMembers",
+  "GetNetStats",
   "InCombatLockdown",
   "IsMounted",
   "IsFlying",
