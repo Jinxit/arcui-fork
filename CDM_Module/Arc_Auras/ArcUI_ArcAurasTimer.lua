@@ -64,6 +64,10 @@ local function safeDuration(d) local n = tonumber(d); return (n and n > 0) and n
 -- ═══════════════════════════════════════════════════════════════════════════
 
 local START_EVENTS = { cast = true, cooldown = true, proc = true }
+-- Generator/spender entries additionally accept the synthetic "expire" event
+-- ("Timer Complete" — the timer's own duration finishing). Start triggers do
+-- NOT — only real spell events can START a timer.
+local ECONOMY_EVENTS = { cast = true, cooldown = true, proc = true, expire = true }
 local END_EVENTS   = { cast = true, proc = true, procEnd = true, death = true }
 
 local function NormalizeEventSet(raw, allowed)
@@ -139,7 +143,7 @@ local function NormalizeConfigTriggers(config)
                 local events = {}
                 if type(e.events) == "table" then
                     for k, v in pairs(e.events) do
-                        if v and START_EVENTS[k] then events[k] = true end
+                        if v and ECONOMY_EVENTS[k] then events[k] = true end
                     end
                 end
                 local sid = tonumber(e.spellID)
@@ -212,6 +216,17 @@ local function NormalizeConfigTriggers(config)
         restartOnRefire = restartOnRefire,
         trackStacks     = trackStacks,
         stackMode       = stackMode,
+        -- "Start full": while the consume timer is idle, the icon shows
+        -- initialStacks (e.g. 2/2) instead of 0; casting then consumes from it
+        -- (the start cast also spends if the start spell is a spender), and the
+        -- icon returns to full when the duration ends. Consume mode only.
+        startFull       = (type(config.startTrigger) == "table"
+                           and config.startTrigger.startFull == true) or false,
+        -- "Recharge until full": on each duration completion, if still below
+        -- Max the timer runs again (recharging another cycle) and stops at Max.
+        -- Pair with a "Timer Complete" generator to make spell-charges recharge.
+        rechargeUntilFull = (type(config.startTrigger) == "table"
+                           and config.startTrigger.rechargeUntilFull == true) or false,
         -- consume-mode config (always present; only consulted when
         -- stackMode == "consume" so other modes are unaffected)
         maxStacks       = maxStacks,
@@ -297,9 +312,30 @@ end
 local function ApplyVisuals(td)
     local fd = td.fd
     if not fd then return end
-    local isOnCD = IsTimerActive(td)
+    local active = IsTimerActive(td)
+    -- On a real active/inactive TRANSITION, force a full re-application by
+    -- nilling the visual-state cache and the alpha dedup memo. External code
+    -- (group visibility, layouts, CDM maintenance) can change the frame's
+    -- real alpha without updating _lastAppliedAlpha; a stale memo makes
+    -- ApplySpellStateVisuals skip its SetAlpha ("value unchanged") and the
+    -- icon stays invisible while the timer is active until something else
+    -- (reload, options panel cycle) clears the caches. Transitions are rare,
+    -- so the forced re-application costs nothing at idle.
+    if fd._arcLastTimerActive ~= active then
+        fd._arcLastTimerActive = active
+        if fd.frame then
+            fd.frame._arcLastSpellState = nil
+            fd.frame._lastAppliedAlpha  = nil
+        end
+    end
     if ns.ArcAurasCooldown and ns.ArcAurasCooldown.ApplySpellStateVisuals then
-        ns.ArcAurasCooldown.ApplySpellStateVisuals(fd, isOnCD, nil, false)
+        -- FLIP (matches GetCooldownState + FeedCooldown): a RUNNING timer maps to
+        -- the readyState bucket ("Active State") so it reuses the glow suite.
+        -- The isOnCD param passed here = not active. Passing the UN-flipped value
+        -- here was the cause of the active⇄not-active flicker: this path fought
+        -- the flipped FeedCooldown / RefreshAllSpellVisuals paths every refresh
+        -- (constant with independent-duration stacks).
+        ns.ArcAurasCooldown.ApplySpellStateVisuals(fd, not active, nil, false)
     end
 end
 
@@ -495,6 +531,9 @@ end
 local function GenSpenderMatches(entry, evEvent, evSpellID)
     if not entry or type(entry.events) ~= "table" then return false end
     if not entry.events[evEvent] then return false end
+    -- "expire" = the timer's own Timer Complete event. It has no spell, so it
+    -- matches on the event flag alone (the entry's spellID is ignored).
+    if evEvent == "expire" then return true end
     if not evSpellID or not entry.spellID then return false end
     return evSpellID == entry.spellID
 end
@@ -614,11 +653,80 @@ local function ClearAllStacks(td)
     RefreshStackDisplay(td)
 end
 
+-- Returns true if any generator/spender has the "Timer Complete" (expire)
+-- event checked — used to decide whether a duration completion should recharge
+-- the pool (keep + maybe re-run) instead of wiping it.
+local function HasTimerCompleteEntry(st)
+    if not st then return false end
+    local lists = { st.generators, st.spenders }
+    for li = 1, #lists do
+        local list = lists[li]
+        if type(list) == "table" then
+            for i = 1, #list do
+                if list[i].events and list[i].events.expire then return true end
+            end
+        end
+    end
+    return false
+end
+
+-- Apply the "Timer Complete" (expire) generators/spenders when the duration
+-- finishes. Spenders checked first (matches the live dispatcher's "spend wins");
+-- one entry applies.
+local function FireTimerCompleteEconomy(td)
+    local st = td.startTrigger
+    if not st then return end
+    if st.spenders then
+        for i = 1, #st.spenders do
+            if GenSpenderMatches(st.spenders[i], "expire", nil) then
+                ConsumeStack(td, st.spenders[i].amount or 1)
+                return
+            end
+        end
+    end
+    if st.generators then
+        for i = 1, #st.generators do
+            if GenSpenderMatches(st.generators[i], "expire", nil) then
+                GainStacks(td, st.generators[i].amount or 1)
+                return
+            end
+        end
+    end
+end
+
 -- Called when the visible cooldown's OnCooldownDone fires. Our authoritative
 -- "ready" transition point — flips state and re-applies visuals. Also the
 -- natural point where "refresh"-mode stacks all die at once.
 local function OnCooldownDone(td)
     td.active = false
+    local st = td.startTrigger
+    -- Consume mode with a "Timer Complete" generator/spender and/or the
+    -- "Recharge until full" toggle: the duration completing is a recharge tick,
+    -- NOT the end of the pool. Apply the Timer-Complete entries, then re-run
+    -- while still below Max — but only when this tick actually GAINED a stack,
+    -- so it always terminates at Max (never a perpetual run). Otherwise stop
+    -- but KEEP the current pool (so it reads full/at-its-count when idle).
+    if st and st.trackStacks and st.stackMode == "consume"
+       and (st.rechargeUntilFull or HasTimerCompleteEntry(st)) then
+        local before = td.stacks or 0
+        FireTimerCompleteEconomy(td)
+        local after = td.stacks or 0
+        local maxS = tonumber(st.maxStacks) or 5
+        if st.rechargeUntilFull and not st.noMaxStacks
+           and after > before and after < maxS then
+            td.active    = true
+            td.startTime = GetTime()
+            RecordActive(td.arcID, td, td.duration)
+            RefreshTimer(td)
+            RefreshStackDisplay(td)
+            return
+        end
+        -- Reached Max, single cycle, or no gain → stop, keep the current pool.
+        ClearActive(td.arcID)
+        RefreshStackDisplay(td)
+        ApplyVisuals(td)
+        return
+    end
     -- In refresh mode the main duration ending kills all stacks at once.
     -- In independent mode, stacks fall off on their own schedule and may
     -- have already cleared to 0; if any are still alive here, the main
@@ -742,6 +850,15 @@ function ArcAurasTimer.CreateTimer(arcID, config)
     frame._arcIsSpellCooldown = true
     frame._arcIsCustomTimer   = true
 
+    -- Alpha enforcement hook — same one InitializeSpellFrame installs for
+    -- regular spell frames. Timer frames bypass InitializeSpellFrame, so
+    -- without this the frame's real alpha and _lastAppliedAlpha drift apart
+    -- whenever external code touches SetAlpha, and the active/inactive alpha
+    -- from the options panel stops applying until a reload/panel cycle.
+    if ns.ArcAurasCooldown and ns.ArcAurasCooldown.InstallAlphaEnforcementHook then
+        ns.ArcAurasCooldown.InstallAlphaEnforcementHook(frame)
+    end
+
     if not frame._durationObj and C_DurationUtil and C_DurationUtil.CreateDuration then
         frame._durationObj = C_DurationUtil.CreateDuration()
     end
@@ -772,7 +889,11 @@ function ArcAurasTimer.CreateTimer(arcID, config)
         -- Engine state (match normal spell fd shape for compatibility)
         isCustomTimer    = true,
         isChargeSpell    = false,
-        desaturate       = true,
+        -- Custom-icon frames never desaturate in EITHER state (Active or Not
+        -- Active) — desaturation isn't wanted for timer icons. The cooldown
+        -- bucket reads fd.desaturate==false to force no-desat; the ready bucket
+        -- is guarded the same way in ApplySpellStateVisuals.
+        desaturate       = false,
         lastIsOnGCD      = nil,
         lastIsOnCD       = false,
         procGlowActive   = false,
@@ -1280,8 +1401,72 @@ end
 local cooldownSuppressUntil = 0
 local COOLDOWN_SUPPRESS_SECONDS = 2
 
+-- ───────────────────────────────────────────────────────────────────────────
+-- ONE-TIME MIGRATION: custom-timer state-visual FLIP.
+-- Earlier builds mapped a RUNNING timer to the cooldownState visual bucket; it
+-- now maps to readyState (so "Active State" reuses the glow suite, matching
+-- totems). That inverts the meaning of any per-timer appearance the user already
+-- set, so swap cooldownStateVisuals.readyState ↔ .cooldownState for every
+-- custom-timer (arc_timer_*) icon — their configured intent is preserved under
+-- the new mapping. Runs once per character (flag persisted in the cdmGroups DB).
+-- Global defaults are intentionally NOT swapped: they apply to all cooldown
+-- icons, and the flip makes them read more sensibly for timers anyway
+-- (running → bright readyState defaults, stopped → dimmed cooldownState).
+-- ───────────────────────────────────────────────────────────────────────────
+local function MigrateTimerStateFlip()
+    local db = ns.CDMShared and ns.CDMShared.GetCDMGroupsDB and ns.CDMShared.GetCDMGroupsDB()
+    if not db or db._timerStateFlipMigrated then return end
+
+    local function swapStore(iconSettings)
+        if type(iconSettings) ~= "table" then return end
+        for arcID, s in pairs(iconSettings) do
+            if type(arcID) == "string" and arcID:find("^arc_timer_")
+               and type(s) == "table" and type(s.cooldownStateVisuals) == "table" then
+                local csv = s.cooldownStateVisuals
+                csv.readyState, csv.cooldownState = csv.cooldownState, csv.readyState
+                -- Desaturation normalization. The OLD model used the inverted "No
+                -- Desaturation" toggle (and defaulted to desaturated-while-running);
+                -- the NEW model uses a positive "Desaturate" toggle that defaults
+                -- OFF. Per the chosen "clean default = colored": drop the orphaned
+                -- noDesaturate cruft AND clear desaturate so every migrated timer
+                -- starts NOT desaturated. An old "keep colored" choice stays colored;
+                -- the old auto-gray default becomes colored. Users re-enable via the
+                -- new per-state Desaturate toggle.
+                if type(csv.readyState) == "table" then
+                    csv.readyState.noDesaturate = nil
+                    csv.readyState.desaturate   = nil
+                end
+                if type(csv.cooldownState) == "table" then
+                    csv.cooldownState.noDesaturate = nil
+                    csv.cooldownState.desaturate   = nil
+                end
+            end
+        end
+    end
+
+    if type(db.specData) == "table" then
+        for _, specData in pairs(db.specData) do
+            if type(specData) == "table" and type(specData.layoutProfiles) == "table" then
+                for _, profile in pairs(specData.layoutProfiles) do
+                    if type(profile) == "table" then swapStore(profile.iconSettings) end
+                end
+            end
+        end
+    end
+
+    -- Legacy per-icon store, if it still exists on this character.
+    if ns.db and ns.db.profile and ns.db.profile.cdmEnhance then
+        swapStore(ns.db.profile.cdmEnhance.iconSettings)
+    end
+
+    db._timerStateFlipMigrated = true
+    if ns.CDMEnhance and ns.CDMEnhance.InvalidateCache then ns.CDMEnhance.InvalidateCache() end
+end
+
 evFrame:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
     if event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
+        -- Run the state-flip migration before any timer visuals are applied.
+        MigrateTimerStateFlip()
         -- Arm cooldown-event suppression: ignore SPELL_UPDATE_COOLDOWN
         -- triggers for a short window to absorb the burst Blizzard sends
         -- on zone changes / load-in.
@@ -1426,6 +1611,20 @@ evFrame:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
                and td.startTrigger and TriggerMatches(td.startTrigger, td, evEvent, evSpellID) then
             if not td.active or td.startTrigger.restartOnRefire then
                 ArcAurasTimer.StartTimer(arcID)
+                -- "Start full": the starting cast also consumes if it is itself
+                -- a spender, so a pre-seeded pool decrements from the very first
+                -- cast (e.g. Stormstrike both starts the window and spends a
+                -- stack). Without this the first cast would only seed the pool.
+                if td.startTrigger.startFull
+                   and td.startTrigger.stackMode == "consume"
+                   and td.startTrigger.spenders then
+                    for i = 1, #td.startTrigger.spenders do
+                        if GenSpenderMatches(td.startTrigger.spenders[i], evEvent, evSpellID) then
+                            ConsumeStack(td, td.startTrigger.spenders[i].amount or 1)
+                            break
+                        end
+                    end
+                end
             elseif td.startTrigger.trackStacks
                    and td.startTrigger.stackMode ~= "consume" then
                 -- Timer is already running AND restartOnRefire is off —
