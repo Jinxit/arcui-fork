@@ -13,7 +13,7 @@ regressions without the game client.
 The CI workflow (`.github/workflows/wowless.yml`) runs on every PR that
 touches `.lua`, `.xml`, or `.toc` files:
 
-1. Pulls the fleet runner image (`ghcr.io/jinxit/agents-runner:latest`),
+1. Pulls the fleet runner image (`ghcr.io/jinxit/agents-runner-wowless:latest`),
    which contains a pre-built `wowless_wow` binary, sqlite databases, and
    live retail TACT data at `/opt/wowless/`.
 2. Mounts the repo into the container and runs:
@@ -21,7 +21,7 @@ touches `.lua`, `.xml`, or `.toc` files:
    docker run --rm --workdir /opt/wowless \
      -v "$PWD:/opt/wowless/ArcUI:ro" \
      -v "$RUNNER_TEMP/wowless-out:/opt/wowless/out" \
-     ghcr.io/jinxit/agents-runner:latest \
+     ghcr.io/jinxit/agents-runner-wowless:latest \
      ./wowless_wow run -p wow \
        --addondir build/products/wow/WowlessData \
        --addondir /opt/wowless/ArcUI
@@ -64,7 +64,7 @@ client build.  When the build number changes, **every** entry in
 1. **Find the new build number.**
 
    ```bash
-   docker run --rm ghcr.io/jinxit/agents-runner:latest \
+   docker run --rm ghcr.io/jinxit/agents-runner-wowless:latest \
      cat /opt/wowless/products/wow/WowlessData/build.lua
    ```
 
@@ -78,7 +78,7 @@ client build.  When the build number changes, **every** entry in
    docker run --rm --workdir /opt/wowless \
      -v "$(pwd):/opt/wowless/ArcUI:ro" \
      -v "$wowless_out:/opt/wowless/out" \
-     ghcr.io/jinxit/agents-runner:latest \
+     ghcr.io/jinxit/agents-runner-wowless:latest \
      ./wowless_wow run -p wow \
        --addondir build/products/wow/WowlessData \
        --addondir /opt/wowless/ArcUI \
@@ -88,7 +88,7 @@ client build.  When the build number changes, **every** entry in
 3. **Extract build info for the matcher.**
 
    ```bash
-   docker run --rm ghcr.io/jinxit/agents-runner:latest \
+   docker run --rm ghcr.io/jinxit/agents-runner-wowless:latest \
      cat /opt/wowless/products/wow/WowlessData/build.lua \
      > wowless-build.lua
    ```
