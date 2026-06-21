@@ -41,12 +41,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull runner image
-        run: docker pull ghcr.io/jinxit/agents-runner:latest
+        run: docker pull ghcr.io/jinxit/agents-runner-wowless:latest
 
       - name: Extract wowless build info
         run: |
           docker run --rm \
-            ghcr.io/jinxit/agents-runner:latest \
+            ghcr.io/jinxit/agents-runner-wowless:latest \
             cat /opt/wowless/products/wow/WowlessData/build.lua \
             > wowless-build.lua
           echo "::group::Wowless build info"
@@ -63,7 +63,7 @@ jobs:
             --workdir /opt/wowless \
             -v "${{ github.workspace }}:/opt/wowless/ArcUI:ro" \
             -v "$wowless_out:/opt/wowless/out" \
-            ghcr.io/jinxit/agents-runner:latest \
+            ghcr.io/jinxit/agents-runner-wowless:latest \
             ./wowless_wow run -p wow \
               --addondir build/products/wow/WowlessData \
               --addondir /opt/wowless/ArcUI \
