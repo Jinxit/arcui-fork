@@ -135,6 +135,14 @@ function BGA.GetAnchorPoints(display)
   return src, dst
 end
 
+local function IsTopEdgePoint(point) -- [FORK] shared-edge helper for matchIconEdges (issue #33)
+  return point == "TOP" or point == "TOPLEFT" or point == "TOPRIGHT"
+end
+
+local function IsBottomEdgePoint(point) -- [FORK] shared-edge helper for matchIconEdges (issue #33)
+  return point == "BOTTOM" or point == "BOTTOMLEFT" or point == "BOTTOMRIGHT"
+end
+
 -- [FORK] end
 -- ===================================================================
 
@@ -171,7 +179,7 @@ end
 
 --- Apply group-aligned anchor to a bar frame using explicit 9-point anchor names.
 --- When applyIconEdges is true, an automatic Y inset aligns the bar flush with
---- icon edges when destPoint is a top/bottom container edge (resource bars only).
+--- icon edges when sourcePoint and destPoint share a top/bottom edge (resource bars only).
 --- @param frame table WoW frame to anchor
 --- @param container table CDMGroups container frame
 --- @param group table CDMGroups group object
@@ -183,11 +191,11 @@ end
 function BGA.ApplyAnchor(frame, container, group, sourcePoint, destPoint, offsetX, offsetY, applyIconEdges) -- [FORK] signature change (issue #14)
   local ox = offsetX or 0
   local oy = offsetY or 0
-  -- [FORK] begin: icon-edge Y inset applied via destPoint matching, not via anchorPoint branch (issue #14)
+  -- [FORK] begin: icon-edge Y inset applies only when source/dest share the same edge (issue #33)
   if applyIconEdges then
-    if destPoint == "TOP" or destPoint == "TOPLEFT" or destPoint == "TOPRIGHT" then
+    if IsTopEdgePoint(sourcePoint) and IsTopEdgePoint(destPoint) then
       oy = oy - GetIconInsetY(group)
-    elseif destPoint == "BOTTOM" or destPoint == "BOTTOMLEFT" or destPoint == "BOTTOMRIGHT" then
+    elseif IsBottomEdgePoint(sourcePoint) and IsBottomEdgePoint(destPoint) then
       oy = oy + GetIconInsetBottom(group)
     end
   end
