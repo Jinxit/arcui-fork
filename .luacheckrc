@@ -130,8 +130,13 @@ globals = {
   "GetRuneCooldown",
   "GetTotemDuration",
   "GetTotemInfo",
+  "GetNumTotemSlots",
   "GetUnitChargedPowerPoints",
+  "GetUnitEmpowerHoldAtMaxTime",
+  "GetUnitEmpowerStageDuration",
   "HasAction",
+  "UnitCastingInfo",
+  "UnitChannelInfo",
 
   -- Talent / trait API
   "GetSpecialization",
@@ -168,6 +173,7 @@ globals = {
 
   -- Timer / scheduler
   "C_Timer",
+  "C_StringUtil",
   "GetTime",
   "debugprofilestop",
   "date",
@@ -180,6 +186,7 @@ globals = {
   -- Tooltip
   "GameTooltip",
   "GameTooltipTextLeft1",
+  "GameTooltip_Hide",
   "TooltipDataProcessor",
   "C_TooltipInfo",
 
@@ -189,11 +196,13 @@ globals = {
   "InterfaceOptionsFrame",
   "InterfaceOptionsFramePanelContainer",
   "SlashCmdList",
+  "UISpecialFrames",
   "ColorPickerFrame",
   "CreateColor",
   "CreateTexturePool",
   "CreateVector2D",
   "GameFontNormal",
+  "ChatFontNormal",
   "GetCursorPosition",
   "GetMouseFoci",
   "GetMouseFocus",
@@ -214,6 +223,7 @@ globals = {
   "CooldownFrame_Set",
   "CooldownFrame_Clear",
   "AbbreviateNumbers",
+  "PlayerCastingBarFrame",
   "ActionButtonSpellAlertManager",
   "AssistedCombatManager",
   "C_ActionBar",
@@ -286,6 +296,7 @@ globals = {
   "C_CombatAudioAlert",
   "C_CreatureInfo",
   "C_EncodingUtil",
+  "C_RestrictedActions",
   "C_TTSSettings",
   "C_VoiceChat",
   "ElvUI",
@@ -296,6 +307,7 @@ globals = {
   "GetBuildInfo",
   "GetCVarBool",
   "GetInstanceInfo",
+  "GetNetStats",
   "GetNumShapeshiftForms",
   "GetRealmName",
   "GetShapeshiftForm",
@@ -318,7 +330,9 @@ globals = {
   "PlaySoundFile",
   "RAID_CLASS_COLORS",
   "ReloadUI",
+  "SendChatMessage",
   "SetCVar",
+  "SetDesaturation",
   "StopSound",
   "TextToSpeech_GetSelectedVoice",
   "arg2",
@@ -360,6 +374,19 @@ globals = {
   "POWER_TYPE_ESSENCE",
   "NUM_STANCE_SLOTS",
   "BOOKTYPE_SPELL",
+  "LE_PARTY_CATEGORY_INSTANCE",
+  "MAX_ACCOUNT_MACROS",
+  "MAX_CHARACTER_MACROS",
+
+  -- Macro API / upstream kick assist helpers
+  "CreateMacro",
+  "EditMacro",
+  "GetMacroIndexByName",
+  "GetMacroInfo",
+  "GetNumMacros",
+  "PickupMacro",
+  "KickAssist_Show",
+  "KickAssist_ShowMacroEditor",
 
   -- Wowless-only (CI test guard)
   "WowlessData",

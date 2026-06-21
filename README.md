@@ -1,26 +1,67 @@
-# ArcUI (Fork)
+# ArcUI
 
-A maintained fork of [ArcUI](https://www.curseforge.com/wow/addons/arc-ui) — buff/debuff tracking bars, resource bars, cooldown bars, timer bars, and Cooldown Manager integration for World of Warcraft (retail).
+A World of Warcraft addon for WoW 12.0 (Midnight) that adds tracking bars, custom icon groups, and cooldown tooling built on top of Blizzard's native CooldownViewer (CDM).
 
-## What's different?
+**Current version:** 3.7.1  
+ 
+**Related addon:** ArcUI_ProcTracker
 
-This fork adds quality-of-life improvements on top of the upstream addon:
+---
 
-- **Health as a resource bar source** — track health alongside mana/rage/energy
-- **Texture-based borders** — 8-slice backdrop renderer replacing the single-quad LSM border
-- **Border inset controls** — hover preview, inset slider, extended range
-- **CDM group anchor rework** — 9-point source/dest anchoring with percentage-based sizing
+## What it does
 
-Custom changes are kept minimal and isolated to survive upstream merges. See individual PRs for details.
+### Tracking Bars
+Horizontal bars that track buff/debuff durations, stack counts, resource levels, cooldowns, charges, and custom timers — anchored to CDM group containers or positioned freely. Bars update event-driven (no polling).
 
-## Installation
+- **Aura bars** — buff/debuff duration and stack tracking with threshold highlights and tick marks
+- **Resource bars** — primary and secondary power with smoothing, segmented/fragmented display modes, spell-cost forecasting, and per-spec auto power profiles
+- **Cooldown & charge bars** — per-spell cooldown progress with charge tracking
+- **Timer bars** — custom timers with configurable triggers (cast events, cooldown events, procs)
+- **Appearance presets** — save and apply skins across bar types; library stored globally
 
-Download the latest release from the [Releases](../../releases) page and extract into your `Interface/AddOns/` directory, or point [WowUp](https://wowup.io/) at this repo.
+### CDM Integration
+ArcUI attaches to Blizzard's CooldownViewer to extend every icon it manages.
 
-## Upstream
+- **Icon groups** — drag-reorganize CDM icons into custom groups with grid/flex layouts, per-spec profiles, and visibility conditions (combat, mounted, group size, etc.)
+- **Icon styling** — custom glow types (pixel, autocast, proc, Blizzard ants), alpha/desaturation for inactive states, cooldown text color curves, custom labels (up to 3 overlays per icon), keybind text
+- **GCD filter** — strips the GCD swipe from cooldown icons so it doesn't obscure real cooldowns
+- **Spell usability tinting** — vertex color tinting when a spell can't be cast, with optional glow
+- **Arc Auras** — custom item, trinket, or spell icons that live in CDM groups but track whatever you want, including custom timers with stack modes
+- **Assisted Combat Highlight** — mirrors Blizzard's "next cast" highlight on CDM and Arc Aura frames
+- **Button Press Highlight** — flash or hold overlay on button press via action/cast hooks
+- **Masque support** — optional skin registration for CDM and Arc Aura frames
 
-Upstream releases from [CurseForge](https://www.curseforge.com/wow/addons/arc-ui) are automatically synced into the `upstream` branch and merged into `main`. Custom patches are designed to layer on top without modifying upstream files where possible.
+### Cooldown Reminder
+Watches for spell and item cooldown-ready transitions and fires queued pulse animations, sounds, TTS, and per-trigger glows. Configurable per spell with priority ordering.
 
-## License
+### Custom Tracking
+Deterministic aura/cooldown engine driven by `UNIT_SPELLCAST_SUCCEEDED`. Supports stacks, decay timers, modifier conditions, and talent/spec gating — for cases where UNIT_AURA isn't reliable enough.
 
-This fork is maintained with permission from the original author. See [LICENSE.txt](LICENSE.txt) for the upstream license terms.
+### Import / Export
+Single import window that auto-detects string type (bars, CDM layout, master export, or Cooldown Reminder) and routes to the right importer. Master export covers all characters and specs in one string. Shared profiles let same-class alts sync their CDM layout by reference.
+
+---
+
+## Slash commands
+
+| Command | What it does |
+|---|---|
+| `/arcui` or `/ab` | Open options |
+| `/arc` | Arc Auras manager |
+| `/arcuicr` | Cooldown Reminder options |
+| `/arcrepair` | SavedVariables cleanup (ghost bars, corruption) |
+| `/cdbar` | Cooldown bar debug/management |
+| `/arcmasque` | Masque group registration |
+
+---
+
+## Requirements
+
+- Blizzard CooldownViewer must be **enabled** in the Edit Mode layout you're using
+---
+
+## Notes
+
+- All features default to **off** — nothing changes until you enable it
+- Settings are per-character, per-spec, with optional global defaults
+- SavedVariables: `ArcUIDB`
