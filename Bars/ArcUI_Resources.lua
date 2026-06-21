@@ -751,47 +751,53 @@ end
 -- GET RUNE COOLDOWN DETAILS (Per-rune cooldown data)
 -- Returns: table of { start, duration, ready, fillPercent } for each rune
 -- ===================================================================
+-- Reused storage + a hoisted comparator: this runs from per-tick rune render
+-- paths, so we avoid allocating 7 tables and a sort closure on every call.
+local _runeDataCache = {}
+local function RuneSortComparator(a, b)
+  if a.ready ~= b.ready then
+    return a.ready  -- ready (true) sorts before charging (false)
+  end
+  if not a.ready then
+    return a.fillPercent > b.fillPercent  -- closer to ready first
+  end
+  return a.runeIndex < b.runeIndex  -- stable order among ready runes
+end
+
 function ns.Resources.GetRuneCooldownDetails()
   local max = UnitPowerMax("player", Enum.PowerType.Runes) or 6
   if max <= 0 then return nil end
-  
-  local runeData = {}
+
   local now = GetTime()
-  
   for i = 1, max do
     local start, duration, runeReady = GetRuneCooldown(i)
-    
+
     local fillPercent = 1  -- Default to full
     if not runeReady and start and duration and duration > 0 then
-      -- Calculate progress
-      local elapsed = now - start
-      fillPercent = math.min(1, math.max(0, elapsed / duration))
+      fillPercent = math.min(1, math.max(0, (now - start) / duration))
     end
-    
-    runeData[i] = {
-      runeIndex = i,       -- Preserve original game rune index
-      start = start or 0,
-      duration = duration or 0,
-      ready = runeReady,
-      fillPercent = fillPercent
-    }
+
+    -- Reuse the per-rune table instead of allocating a fresh one each call.
+    local rd = _runeDataCache[i]
+    if not rd then rd = {}; _runeDataCache[i] = rd end
+    rd.runeIndex   = i            -- preserve original game rune index
+    rd.start       = start or 0
+    rd.duration    = duration or 0
+    rd.ready       = runeReady
+    rd.fillPercent = fillPercent
   end
-  
+
+  -- Drop stale trailing entries if max shrank (talent change) so the sort and
+  -- callers see exactly `max` entries.
+  for i = #_runeDataCache, max + 1, -1 do
+    _runeDataCache[i] = nil
+  end
+
   -- Sort: ready runes first (leftmost), then charging runes by progress
-  -- descending (most progressed / closest to ready displayed next)
-  table.sort(runeData, function(a, b)
-    if a.ready ~= b.ready then
-      return a.ready  -- ready (true) sorts before charging (false)
-    end
-    if not a.ready then
-      -- Both charging: higher fillPercent (closer to ready) comes first
-      return a.fillPercent > b.fillPercent
-    end
-    -- Both ready: maintain stable order by original rune index
-    return a.runeIndex < b.runeIndex
-  end)
-  
-  return runeData, max
+  -- descending (most progressed / closest to ready displayed next).
+  table.sort(_runeDataCache, RuneSortComparator)
+
+  return _runeDataCache, max
 end
 
 -- ===================================================================
@@ -3879,6 +3885,10 @@ local function UpdateThresholdLayers(barNumber, secretValue, passedMaxValue, dis
       if not mainFrame.fragmentedOnUpdate then
         mainFrame.fragmentedOnUpdate = function(self, elapsed)
           if not self.fragmentFrames or not self:IsShown() then return end
+          -- Throttle to 10Hz; native bar interpolation smooths the fill between ticks.
+          self._fragmentedElapsed = (self._fragmentedElapsed or 0) + elapsed
+          if self._fragmentedElapsed < 0.1 then return end
+          self._fragmentedElapsed = 0
           -- Skip during preview — SetPreviewValue drives animation via UpdateThresholdLayers
           if IsOptionsOpen() then return end
           
@@ -3904,8 +3914,17 @@ local function UpdateThresholdLayers(barNumber, secretValue, passedMaxValue, dis
           for _, seg in ipairs(data) do
             if seg.ready then readyCount = readyCount + 1 end
           end
+          -- All runes ready: nothing animates. Render the ready state once, then
+          -- skip per-tick work until a rune is spent (RUNE_POWER_UPDATE re-renders
+          -- on spend; the flag clears on the next charging tick).
+          if readyCount >= num then
+            if self._fragAllReady then return end
+            self._fragAllReady = true
+          else
+            self._fragAllReady = false
+          end
           local countColor = GetActiveCountColor(config, readyCount)
-          
+
           for i = 1, num do
             local segFrame = self.fragmentFrames[i]
             
@@ -4541,6 +4560,10 @@ local function UpdateThresholdLayers(barNumber, secretValue, passedMaxValue, dis
       if not mainFrame.iconsOnUpdate then
         mainFrame.iconsOnUpdate = function(self, elapsed)
           if not self.iconFrames or not self:IsShown() then return end
+          -- Throttle to 10Hz; native bar interpolation smooths the fill between ticks.
+          self._iconsElapsed = (self._iconsElapsed or 0) + elapsed
+          if self._iconsElapsed < 0.1 then return end
+          self._iconsElapsed = 0
           -- Skip during preview — SetPreviewValue drives animation via UpdateThresholdLayers
           if IsOptionsOpen() then return end
           
@@ -4576,8 +4599,17 @@ local function UpdateThresholdLayers(barNumber, secretValue, passedMaxValue, dis
           for _, seg in ipairs(data) do
             if seg.ready then readyCount = readyCount + 1 end
           end
+          -- All charges ready: nothing animates. Render the ready state once, then
+          -- skip per-tick work until a charge is spent (the resource event re-renders
+          -- on spend; the flag clears on the next charging tick).
+          if readyCount >= num then
+            if self._iconsAllReady then return end
+            self._iconsAllReady = true
+          else
+            self._iconsAllReady = false
+          end
           local countColor = GetActiveCountColor(config, readyCount)
-          
+
           for i = 1, num do
             local iconFrame = self.iconFrames[i]
             
@@ -7015,6 +7047,36 @@ local function InitWithRetry(attempts)
   end
 end
 
+-- ===================================================================
+-- POWER UPDATE THROTTLE
+-- UNIT_POWER_FREQUENT can fire at up to frame-rate while a resource regenerates.
+-- Coalesce to 10Hz in combat / 4Hz out of combat (matching SenseiClassResourceBar's
+-- rates); the native StatusBar interpolation smooths the gaps so it still looks
+-- 60fps. Leading + trailing edge so the first and final values are always exact.
+-- Stays event-driven, so it costs ZERO CPU when power is static (no constant poll,
+-- unlike a competing addon's OnUpdate approach).
+-- ===================================================================
+local powerLast = 0
+local powerPending = {}          -- set: [powerToken] = true since last flush
+local powerFlushScheduled = false
+
+local function ApplyPowerUpdates()
+  powerFlushScheduled = false
+  powerLast = GetTime()
+  for token in pairs(powerPending) do
+    powerPending[token] = nil
+    local tokenBars = powerTokenCache[token]
+    if tokenBars then
+      for _, barNumber in ipairs(tokenBars) do
+        UpdateBarValue(barNumber)
+      end
+    end
+  end
+  for _, barNumber in ipairs(autoPrimaryBars) do
+    UpdateBarValue(barNumber)
+  end
+end
+
 eventFrame:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
   if event == "ADDON_LOADED" and arg1 == ADDON then
     -- Addon loaded, but DB might not be ready yet
@@ -7045,17 +7107,21 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
   elseif event == "UNIT_POWER_FREQUENT" and arg1 == "player" then
     if not isInitialized then return end
 
-    local powerToken = arg2
-
-    local tokenBars = powerTokenCache[powerToken]
-    if tokenBars then
-      for _, barNumber in ipairs(tokenBars) do
-        ns.Resources.UpdateBar(barNumber)
-      end
-    end
-
-    for _, barNumber in ipairs(autoPrimaryBars) do
-      ns.Resources.UpdateBar(barNumber)
+    -- Per-tick updates use the lightweight UpdateBarValue (fill/color/prediction/
+    -- text only), NOT the full UpdateBar (which re-ran spec/talent/hideWhen checks
+    -- + frame setup every tick — the cause of high idle CPU). Coalesced to 10Hz in
+    -- combat / 4Hz idle via ApplyPowerUpdates; native bar interpolation smooths the
+    -- gaps. Setup-affecting conditions (spec/talent/form/hideWhen) are refreshed by
+    -- their own events; UpdateBarValue self-falls-back to the full rebuild when a
+    -- bar's frames don't exist yet or it's hidden.
+    powerPending[arg2] = true
+    local interval = InCombatLockdown() and 0.1 or 0.25
+    local sinceLast = GetTime() - powerLast
+    if sinceLast >= interval then
+      ApplyPowerUpdates()                                     -- leading edge
+    elseif not powerFlushScheduled then
+      powerFlushScheduled = true
+      C_Timer.After(interval - sinceLast, ApplyPowerUpdates)  -- trailing edge
     end
     
   elseif event == "RUNE_POWER_UPDATE" then

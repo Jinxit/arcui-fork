@@ -29,6 +29,26 @@ local C_DESC  = "ffb0b0b0"  -- entry description
 -- ===================================================================
 CL.versions = {
   {
+    version = "3.7.4",
+    sections = {
+      {
+        header = "New Features", color = C_NEW, items = {
+          { title = "Kick Assist", desc = "A built-in interrupt helper in its own tab. Claim your kick raid marker, have it automatically called out to your group on a ready check, and drag ready-made one-press interrupt macros straight onto your bars. Pick which instances it triggers in: Mythic+, Mythic, Heroic, Normal, or Raids. Also available as a separate addon if you want just this without ArcUI." },
+        },
+      },
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "Smoother Bars", desc = "Bar and resource animations no longer do work every frame. Rune fill updates are throttled and go idle when all runes are ready, lowering background CPU use during play." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Duration Text on Refresh", desc = "Buff and debuff bar countdowns now update correctly when a buff is refreshed, for example Bone Shield, instead of freezing on the old time." },
+        },
+      },
+    },
+  },
+  {
     version = "3.7.3",
     sections = {
       {

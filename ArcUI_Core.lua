@@ -20,6 +20,12 @@ local ADDON, ns = ...
 ns = ns or {}
 ns.API = ns.API or {}
 
+-- Optional dev tooling: hand our namespace to !ArcUIProfiler for opt-in deep
+-- per-module CPU profiling. No-op unless that profiler addon is installed (it
+-- loads first and defines the global). We pass the reference; it is only walked
+-- on demand via /arcprof deep, never automatically.
+if _G.ArcUIProfiler_RegisterNamespace then _G.ArcUIProfiler_RegisterNamespace(ns) end
+
 ns.devMode = false
 ns.debugMode = false  -- Stack tracking debug output
 

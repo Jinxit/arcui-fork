@@ -64,6 +64,11 @@ function DT.Bind(fs, durObj, decimals)
     b:SetFormatter(GetFormatter(decimals))
     fs._arcDurDecimals = decimals
   end
+  -- Re-applying the duration on the existing binding restarts the C-side
+  -- countdown (proven: bars on the full UpdateBar path refresh correctly on aura
+  -- reapply). Callers must RE-CALL Bind whenever the duration changes; the bug
+  -- where the text stuck on the old value was a caller skipping this re-bind, not
+  -- the binding itself.
   b:SetDuration(durObj)        -- secret durObj is a safe sink
   b:Enable()
   return true

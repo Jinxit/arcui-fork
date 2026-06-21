@@ -1706,16 +1706,9 @@ local function GetBarFrames(barNumber)
   return barFrames[barNumber].barFrame, barFrames[barNumber].textFrame, barFrames[barNumber].durationFrame, barFrames[barNumber].iconFrame, barFrames[barNumber].nameFrame, barFrames[barNumber].barIconFrame
 end
 
--- ===================================================================
--- CUSTOM TRACKING SMOOTH UPDATE SYSTEM
--- Smooth animation support:
--- full control over the duration values (not secret values from CDM)
--- ===================================================================
-
 -- ═══════════════════════════════════════════════════════════════════════════
 -- DEACTIVATION: Zero-CPU bars hidden by spec/talent conditions
--- When deactivated, the smooth OnUpdate loop skips the bar entirely
--- and all per-frame OnUpdate scripts are cleared.
+-- When deactivated, all per-frame OnUpdate scripts are cleared and frames hidden.
 -- ═══════════════════════════════════════════════════════════════════════════
 local function DeactivateBar(barNumber)
   local frames = barFrames[barNumber]
@@ -1742,24 +1735,6 @@ end
 local function ReactivateBar(barNumber)
   -- No-op: deactivation is handled by frame visibility
 end
-
-
-local smoothUpdateFrame = CreateFrame("Frame")
-local SMOOTH_UPDATE_INTERVAL = 0.03  -- ~30fps for smooth animation
-local smoothUpdateElapsed = 0
-
-smoothUpdateFrame:SetScript("OnUpdate", function(self, elapsed)
-  smoothUpdateElapsed = smoothUpdateElapsed + elapsed
-  if smoothUpdateElapsed < SMOOTH_UPDATE_INTERVAL then return end
-  smoothUpdateElapsed = 0
-  
-  -- Skip updates when preview mode is active (prevents flickering)
-  if previewMode and IsOptionsOpen() then return end
-  
-  local currentTime = GetTime()
-  
-
-end)
 
 -- ===================================================================
 -- SHARED: UPDATE TICK MARKS FOR A BAR
@@ -2355,6 +2330,24 @@ function ns.Display.UpdateBar(barNumber, stacks, maxStacks, active, durationFont
       if barConfig.display.showText then
         textFrame.text:SetText(stacks)
         if not textFrame:IsShown() then textFrame:Show() end
+      end
+      -- Duration text refresh on the fast-path. The C-side DurationTextBinding
+      -- only re-reads its duration when Bind is re-called; the full path below
+      -- does that, but this fast-path returns before reaching it. So a buff
+      -- REFRESH (duration changed while active stayed true — e.g. Marrowrend
+      -- re-applying Bone Shield) would leave the countdown stuck on the old
+      -- value. Re-bind here so refreshes are caught on the fast-path too. Only
+      -- the GetAuraInfo binding source needs this: the pre-12.0.7 OnUpdate
+      -- fallback re-reads every tick and totems poll on their own.
+      if barConfig.display.showDuration and durationFrame and durationFontString
+         and durationFontString.GetAuraInfo and ns.DurationText and ns.DurationText.IsSupported() then
+        local auraID, unit = durationFontString:GetAuraInfo()
+        if auraID and unit then
+          local durObj = C_UnitAuras.GetAuraDuration(unit, auraID)
+          if durObj then
+            ns.DurationText.Bind(durationFrame.text, durObj, barConfig.display.durationDecimals or 1)
+          end
+        end
       end
       -- Restore frames hidden externally (e.g. HideBar from Core trackingOK=false)
       -- If barFrame was hidden, force full path so duration/name/etc get properly re-setup

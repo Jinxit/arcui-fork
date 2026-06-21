@@ -711,6 +711,17 @@ local function GetOptionsTable()
         return tbl
       end)(),
 
+      setMyKick = (function()
+        local tbl = ns.GetSetMyKickOptionsTable and ns.GetSetMyKickOptionsTable() or {
+          type = "group",
+          name = "Kick Assist",
+          args = { loading = { type = "description", name = "Loading...", order = 1 } }
+        }
+        tbl.name  = "Kick Assist"
+        tbl.order = 3.6
+        return tbl
+      end)(),
+
       settings = {
         type = "group",
         name = "Settings",
@@ -1238,7 +1249,10 @@ initFrame:SetScript("OnEvent", function(self, event)
       if ns.Castbar and ns.Castbar.Init then
         ns.Castbar.Init()
       end
-      
+      if ns.SetMyKick and ns.SetMyKick.Init then
+        ns.SetMyKick.Init()
+      end
+
       print("|cff00ccffArc UI|r v" .. ns.AddonInfo.Version .. " loaded. Type /arcui for options, /cdm for CDM settings, /arcui recenter to move panel back to screen.")
     end)
   end
