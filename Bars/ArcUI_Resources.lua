@@ -6271,93 +6271,26 @@ function ns.Resources.ApplyAppearance(barNumber)
     local group = ns.CDMGroups and ns.CDMGroups.groups and ns.CDMGroups.groups[display.anchorGroupName]
     if group and group.container then
       local container = group.container
-      local anchorPoint = display.anchorPoint or "BOTTOM"
-      local offsetX = display.anchorOffsetX or 0
-      local offsetY = display.anchorOffsetY or 0
-      
+      -- [FORK] begin: replaced inline anchor/size block with BGA.ApplySizeAndAnchor (issue #14)
+      local BGA = ns.BarGroupAlign
+      local sourcePoint, destPoint = BGA.GetAnchorPoints(display)
+      local isFragmented   = (display.thresholdMode == "fragmented")
+      local isFragVertical = isFragmented and (display.fragmentedLayoutDirection == "vertical")
+      local isVerticalBar  = needsSwap or isFragVertical
+      local useMatchSlots  = display.matchSlotsOnly or isFragmented
+      local applyIconEdges = display.matchGroupWidth and useMatchSlots and display.matchIconEdges
       local effScale = container:GetEffectiveScale()
-      local isSideAnchor = (anchorPoint == "LEFT" or anchorPoint == "RIGHT")
+      local barHeight = PixelSnap((display.height or 25) * scale, effScale)
 
-      -- Compute barWidth first so anchor can center over slot area.
-      -- _slotAreaW is plain WoW units — no _pmult conversion needed.
-      local barWidth, barHeight
-      if display.matchGroupWidth then
-        local matchDimension
-        -- Fragmented bars: always use _slotAreaW so segments divide evenly.
-        -- containerW includes padding which makes barWidth*ppu not divisible by numSegments.
-        -- Non-fragmented bars: respect matchSlotsOnly setting as before.
-        local isFragmented = (display.thresholdMode == "fragmented")
-        local isFragVertical = isFragmented and (display.fragmentedLayoutDirection == "vertical")
-        if (isFragmented or display.matchSlotsOnly) and group._slotAreaW then
-          if isFragVertical then
-            -- Vertical fragmented: long dimension is always H regardless of anchor side.
-            -- needsSwap puts matchDimension into frame height via SetSize(barHeight, barWidth).
-            matchDimension = group._slotAreaHRaw or group._slotAreaH
-          else
-            -- Horizontal fragmented / non-fragmented: side anchors match H, others match W.
-            matchDimension = isSideAnchor and (group._slotAreaHRaw or group._slotAreaH) or (group._slotAreaWRaw or group._slotAreaW)
-          end
-        else
-          local cW, cH = container:GetWidth(), container:GetHeight()
-          matchDimension = isSideAnchor and cH or cW
-        end
-        if matchDimension and matchDimension > 0 then
-          local sizeAdjust = display.matchWidthAdjust or 0
-          -- SnapToGroupPx: same formula CDMGroups uses for _slotAreaW (1-pixel, UIParent scale).
-          barWidth  = SnapToGroupPx(matchDimension + sizeAdjust)
-          barHeight = PixelSnap((display.height or 25) * scale, effScale)
-
-          -- For fragmented bars: do NOT round barWidth to a numSegments multiple.
-          -- Segment sizing uses raw float division (mfW / numSegments) so the GPU
-          -- handles subpixel edges identically to WeakAuras/ElvUI. Rounding to whole
-          -- pixels causes either unequal segments or bar overhang — both worse than
-          -- the imperceptible ~0.5px subpixel blend at segment boundaries.
-
-          -- Swap for vertical orientation or fragmented vertical layout
-          if needsSwap then
-            mainFrame:SetSize(barHeight, barWidth)
-          else
-            mainFrame:SetSize(barWidth, barHeight)
-          end
-        end
-      end
-
-      -- Anchor: matchSlotsOnly TOP/BOTTOM aligns bar LEFT EDGE to the first icon's left edge.
-      -- rawBase is the inset from container edge to icon area.
-      -- GetActualIconInset reads real icon frame positions — handles all sub-pixel cases
-      -- slot width is odd (CENTER-anchor floor division vs TOPLEFT anchor).
-      local rawBase    = (group and group._slotInsetPx) or 0
-      local alignInset       = GetActualIconInset(group)
-      local alignInsetY      = GetActualIconInsetY(group)
-      local alignInsetBottom = GetActualIconInsetBottom(group)
-      
-      local matchSlots = display.matchGroupWidth and display.matchSlotsOnly and barWidth
-      mainFrame:ClearAllPoints()
-      if anchorPoint == "TOP" then
-        if matchSlots then
-          mainFrame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", alignInset + offsetX, (display.matchIconEdges and -alignInsetY or 0) + offsetY)
-        else
-          mainFrame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", offsetX, offsetY)
-        end
-      elseif anchorPoint == "BOTTOM" then
-        if matchSlots then
-          mainFrame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", alignInset + offsetX, (display.matchIconEdges and alignInsetBottom or 0) + offsetY)
-        else
-          mainFrame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", offsetX, offsetY)
-        end
-      elseif anchorPoint == "LEFT" then
-        if matchSlots then
-          mainFrame:SetPoint("TOPRIGHT", container, "TOPLEFT", offsetX, -(alignInsetY + offsetY))
-        else
-          mainFrame:SetPoint("RIGHT", container, "LEFT", offsetX, offsetY)
-        end
-      elseif anchorPoint == "RIGHT" then
-        if matchSlots then
-          mainFrame:SetPoint("TOPLEFT", container, "TOPRIGHT", offsetX, -(alignInsetY + offsetY))
-        else
-          mainFrame:SetPoint("LEFT", container, "RIGHT", offsetX, offsetY)
-        end
-      end
+      local barWidth = BGA.ApplySizeAndAnchor(mainFrame, display.anchorGroupName,
+          sourcePoint, destPoint,
+          barHeight,
+          display.anchorOffsetX or 0, display.anchorOffsetY or 0,
+          display.matchGroupWidth, useMatchSlots,
+          isVerticalBar,
+          display.matchWidthAdjust or 0, display.matchWidthAdjustPct or 0,
+          needsSwap, applyIconEdges)
+      -- [FORK] end
 
       if display.matchGroupWidth then
         -- size already applied above; block kept for hook registration
@@ -7559,96 +7492,57 @@ end
 -- CDM GROUP CONTAINER SIZE CHANGE CALLBACK
 -- Called by CDMGroups when a container's size changes (dynamic sizing)
 -- ===================================================================
+
+-- [FORK] begin: extracted helper replaces duplicated inline resize code (issue #14)
+local function ResizeAnchoredResourceBarForGroup(barNumber, cfg, groupName, container)
+  if not cfg or not cfg.display or not resourceFrames[barNumber] then return end
+
+  local mainFrame = resourceFrames[barNumber].mainFrame
+  local BGA = ns.BarGroupAlign
+  if not mainFrame or not BGA then return end
+
+  local display = cfg.display
+  local group = ns.CDMGroups and ns.CDMGroups.groups and ns.CDMGroups.groups[groupName]
+  container = container or (group and group.container)
+  if not group or not container then return end
+
+  local scale = display.barScale or 1.0
+  local isVertical = (display.barOrientation == "vertical")
+  local isFragmented = (display.thresholdMode == "fragmented")
+  local isFragmentedVertical = isFragmented and (display.fragmentedLayoutDirection == "vertical")
+  local needsSwap = isFragmented and isFragmentedVertical or (not isFragmented and isVertical)
+  local isVerticalBar = needsSwap or isFragmentedVertical
+  local useMatchSlots = display.matchSlotsOnly or isFragmented
+  local applyIconEdges = display.matchGroupWidth and useMatchSlots and display.matchIconEdges
+  local sourcePoint, destPoint = BGA.GetAnchorPoints(display)
+  local effScale = container:GetEffectiveScale()
+  local barHeight = PixelSnap((display.height or 25) * scale, effScale)
+
+  BGA.ApplySizeAndAnchor(mainFrame, groupName,
+      sourcePoint, destPoint,
+      barHeight,
+      display.anchorOffsetX or 0, display.anchorOffsetY or 0,
+      display.matchGroupWidth, useMatchSlots,
+      isVerticalBar,
+      display.matchWidthAdjust or 0, display.matchWidthAdjustPct or 0,
+      needsSwap, applyIconEdges)
+
+  local mode = display.thresholdMode
+  if mode == "fragmented" or mode == "segmented" or mode == "perStack" or display.showTickMarks then
+    ns.Resources.UpdateBar(barNumber)
+  end
+end
+-- [FORK] end
+
 function ns.Resources.OnGroupContainerSizeChanged(groupName, newWidth, newHeight)
   -- Find all resource bars anchored to this group with matchGroupWidth enabled
   local activeBars = ns.API and ns.API.GetActiveResourceBars and ns.API.GetActiveResourceBars() or {}
-  
+
   for _, barNumber in ipairs(activeBars) do
     local cfg = ns.API.GetResourceBarConfig(barNumber)
     if cfg and cfg.display and cfg.display.anchorToGroup and cfg.display.matchGroupWidth then
       if cfg.display.anchorGroupName == groupName and resourceFrames[barNumber] then
-        local mainFrame = resourceFrames[barNumber].mainFrame
-        if mainFrame then
-          local scale = cfg.display.barScale or 1.0
-          local isVertical = (cfg.display.barOrientation == "vertical")
-          local anchorPoint = cfg.display.anchorPoint or "BOTTOM"
-          local isSideAnchor = (anchorPoint == "LEFT" or anchorPoint == "RIGHT")
-          local group = ns.CDMGroups and ns.CDMGroups.groups and ns.CDMGroups.groups[groupName]
-
-          -- Use container effective scale for pixel snapping.
-          local container = group and group.container
-          local effScale = container and container:GetEffectiveScale() or mainFrame:GetEffectiveScale() or 1
-          -- Fragmented bars always use _slotAreaW for even segment division.
-          -- Non-fragmented respect matchSlotsOnly.
-          local isFragmented = (cfg.display.thresholdMode == "fragmented")
-          local isFragVertical = isFragmented and (cfg.display.fragmentedLayoutDirection == "vertical")
-          local matchDimension
-          if (isFragmented or cfg.display.matchSlotsOnly) and group and group._slotAreaW then
-            if isFragVertical then
-              matchDimension = group._slotAreaHRaw or group._slotAreaH
-            else
-              matchDimension = isSideAnchor and (group._slotAreaHRaw or group._slotAreaH) or (group._slotAreaWRaw or group._slotAreaW)
-            end
-          else
-            matchDimension = isSideAnchor and newHeight or newWidth
-          end
-
-          local sizeAdjust = cfg.display.matchWidthAdjust or 0
-          local barWidth = SnapToGroupPx(matchDimension + sizeAdjust)
-          local barHeight = PixelSnap((cfg.display.height or 25) * scale, effScale)
-          
-          -- Use same needsSwap logic as ApplyAppearance:
-          -- fragmented bars swap on fragmentedLayoutDirection, others on barOrientation.
-          local isFragmented = (cfg.display.thresholdMode == "fragmented")
-          local isFragmentedVertical = isFragmented and (cfg.display.fragmentedLayoutDirection == "vertical")
-          local needsSwap = isFragmented and isFragmentedVertical or (not isFragmented and isVertical)
-          if needsSwap then
-            mainFrame:SetSize(barHeight, barWidth)
-          else
-            mainFrame:SetSize(barWidth, barHeight)
-          end
-          -- Re-anchor: align bar edges to icon area edges.
-          local offsetX         = cfg.display.anchorOffsetX or 0
-          local offsetY         = cfg.display.anchorOffsetY or 0
-          local rawBase         = (group and group._slotInsetPx) or 0
-          local alignInset       = GetActualIconInset(group)
-          local alignInsetY      = GetActualIconInsetY(group)
-          local alignInsetBottom = GetActualIconInsetBottom(group)
-          
-          local matchSlots = cfg.display.matchSlotsOnly and barWidth
-          mainFrame:ClearAllPoints()
-          if anchorPoint == "TOP" then
-            if matchSlots then
-              mainFrame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", alignInset + offsetX, (cfg.display.matchIconEdges and -alignInsetY or 0) + offsetY)
-            else
-              mainFrame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", offsetX, offsetY)
-            end
-          elseif anchorPoint == "BOTTOM" then
-            if matchSlots then
-              mainFrame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", alignInset + offsetX, (cfg.display.matchIconEdges and alignInsetBottom or 0) + offsetY)
-            else
-              mainFrame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", offsetX, offsetY)
-            end
-          elseif anchorPoint == "LEFT" then
-            if matchSlots then
-              mainFrame:SetPoint("TOPRIGHT", container, "TOPLEFT", offsetX, -(alignInsetY + offsetY))
-            else
-              mainFrame:SetPoint("RIGHT", container, "LEFT", offsetX, offsetY)
-            end
-          elseif anchorPoint == "RIGHT" then
-            if matchSlots then
-              mainFrame:SetPoint("TOPLEFT", container, "TOPRIGHT", offsetX, -(alignInsetY + offsetY))
-            else
-              mainFrame:SetPoint("LEFT", container, "RIGHT", offsetX, offsetY)
-            end
-          end
-          -- Tick marks (segmented) and dividers (fragmented) are drawn inside UpdateBar
-          -- using mainFrame:GetWidth(). After a resize, redraw them at the new width.
-          local mode = cfg.display.thresholdMode
-          if mode == "fragmented" or mode == "segmented" or mode == "perStack" or cfg.display.showTickMarks then
-            ns.Resources.UpdateBar(barNumber)
-          end
-        end
+        ResizeAnchoredResourceBarForGroup(barNumber, cfg, groupName) -- [FORK] delegated to helper (issue #14)
       end
     end
   end
@@ -7684,88 +7578,7 @@ local function OnContainerSizeChanged(container, width, height)
     local cfg = ns.API.GetResourceBarConfig(barNumber)
     if cfg and cfg.display and cfg.display.anchorToGroup and cfg.display.anchorGroupName == groupName then
       if cfg.display.matchGroupWidth and resourceFrames[barNumber] then
-        local mainFrame = resourceFrames[barNumber].mainFrame
-        if mainFrame then
-          local scale = cfg.display.barScale or 1.0
-          local isVertical = (cfg.display.barOrientation == "vertical")
-          local anchorPoint = cfg.display.anchorPoint or "BOTTOM"
-          local isSideAnchor = (anchorPoint == "LEFT" or anchorPoint == "RIGHT")
-          local group = ns.CDMGroups and ns.CDMGroups.groups and ns.CDMGroups.groups[groupName]
-
-          -- Use container effective scale for pixel snapping.
-          local effScale = container:GetEffectiveScale()
-          local isFragmented = (cfg.display.thresholdMode == "fragmented")
-          local isFragVertical = isFragmented and (cfg.display.fragmentedLayoutDirection == "vertical")
-          local matchDimension
-          if (isFragmented or cfg.display.matchSlotsOnly) and group and group._slotAreaW then
-            if isFragVertical then
-              matchDimension = group._slotAreaHRaw or group._slotAreaH
-            else
-              matchDimension = isSideAnchor and (group._slotAreaHRaw or group._slotAreaH) or (group._slotAreaWRaw or group._slotAreaW)
-            end
-          else
-            matchDimension = isSideAnchor and height or width
-          end
-          
-          local sizeAdjust = cfg.display.matchWidthAdjust or 0
-          local barWidth = SnapToGroupPx(matchDimension + sizeAdjust)
-          local barHeight = PixelSnap((cfg.display.height or 25) * scale, effScale)
-          
-          -- Use same needsSwap logic as ApplyAppearance:
-          -- fragmented bars swap on fragmentedLayoutDirection, others on barOrientation.
-          local isFragmented = (cfg.display.thresholdMode == "fragmented")
-          local isFragmentedVertical = isFragmented and (cfg.display.fragmentedLayoutDirection == "vertical")
-          local needsSwap = isFragmented and isFragmentedVertical or (not isFragmented and isVertical)
-          if needsSwap then
-            mainFrame:SetSize(barHeight, barWidth)
-          else
-            mainFrame:SetSize(barWidth, barHeight)
-          end
-          -- Re-anchor: align bar left edge to first icon left edge (BOTTOMLEFT + GetActualIconInset(group)).
-          local offsetX     = cfg.display.anchorOffsetX or 0
-          local offsetY     = cfg.display.anchorOffsetY or 0
-          local rawBase     = (group and group._slotInsetPx) or 0
-          local alignInset  = GetActualIconInset(group)
-          local alignInsetY      = GetActualIconInsetY(group)
-          local alignInsetBottom = GetActualIconInsetBottom(group)
-          
-          local matchSlots = cfg.display.matchSlotsOnly and barWidth
-          mainFrame:ClearAllPoints()
-          if anchorPoint == "TOP" then
-            if matchSlots then
-              mainFrame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", alignInset + offsetX, (cfg.display.matchIconEdges and -alignInsetY or 0) + offsetY)
-            else
-              mainFrame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", offsetX, offsetY)
-            end
-          elseif anchorPoint == "BOTTOM" then
-            if matchSlots then
-              mainFrame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", alignInset + offsetX, (cfg.display.matchIconEdges and alignInsetBottom or 0) + offsetY)
-            else
-              mainFrame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", offsetX, offsetY)
-            end
-          elseif anchorPoint == "LEFT" then
-            if matchSlots then
-              mainFrame:SetPoint("TOPRIGHT", container, "TOPLEFT", offsetX, -(alignInsetY + offsetY))
-            else
-              mainFrame:SetPoint("RIGHT", container, "LEFT", offsetX, offsetY)
-            end
-          elseif anchorPoint == "RIGHT" then
-            if matchSlots then
-              mainFrame:SetPoint("TOPLEFT", container, "TOPRIGHT", offsetX, -(alignInsetY + offsetY))
-            else
-              mainFrame:SetPoint("LEFT", container, "RIGHT", offsetX, offsetY)
-            end
-          end
-          -- Tick marks (segmented mode) and dividers (fragmented mode) are drawn in
-          -- UpdateBar using mainFrame:GetWidth() at draw time. After a container resize
-          -- (button add/remove), mainFrame is the correct new size but UpdateBar hasn't
-          -- run yet, so tick/divider positions are still computed from the old width.
-          -- Re-run UpdateBar for any mode that draws width-dependent elements.
-          local mode = cfg.display.thresholdMode
-          if mode == "fragmented" or mode == "segmented" or mode == "perStack" or cfg.display.showTickMarks then
-            ns.Resources.UpdateBar(barNumber)
-          end
-        end
+        ResizeAnchoredResourceBarForGroup(barNumber, cfg, groupName, container) -- [FORK] delegated to helper (issue #14)
       end
     end
   end

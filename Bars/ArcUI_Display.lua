@@ -4484,65 +4484,29 @@ end
 -- Must be defined before ApplyAppearance which calls it.
 -- ===================================================================
 local function UpdateBarForGroup(barNumber, cfg, barFrame, groupName)
+  -- [FORK] begin: replaced inline anchor/size block with BGA.ApplySizeAndAnchor (issue #14)
+  local BGA = ns.BarGroupAlign
+  if not BGA then return end
   local grp = ns.CDMGroups and ns.CDMGroups.groups and ns.CDMGroups.groups[groupName]
   if not grp or not grp.container then return end
-  local container = grp.container
 
-  local scale       = cfg.barScale or 1.0
-  local isVertical  = (cfg.barOrientation == "vertical")
-  local anchorPoint = cfg.anchorPoint or "BOTTOM"
-  local isSideAnchor = (anchorPoint == "LEFT" or anchorPoint == "RIGHT")
+  local scale      = cfg.barScale or 1.0
+  local isVertical = (cfg.barOrientation == "vertical")
+  local effScale   = grp.container:GetEffectiveScale()
+  local barHeight  = BGA.PixelSnap((cfg.height or 20) * scale, effScale)
+  local sourcePoint, destPoint = BGA.GetAnchorPoints(cfg)
 
-  local effScale = container:GetEffectiveScale()
-  local offsetX = PixelSnap(cfg.anchorOffsetX or 0, effScale)
-  local offsetY = PixelSnap(cfg.anchorOffsetY or 0, effScale)
-
-  -- Compute bar size first so we can use barWidth for centering
-  local barWidth, barHeight
-  if cfg.matchGroupWidth then
-    local sizeAdjust = cfg.matchWidthAdjust or 0
-    local matchDimension
-    if cfg.matchSlotsOnly and grp._slotAreaW then
-      -- Use active slot span (already snapped WoW units)
-      matchDimension = isSideAnchor
-        and (grp._slotAreaHRaw or grp._slotAreaH)
-        or  (grp._slotAreaWRaw or grp._slotAreaW)
-    else
-      local cW, cH = container:GetWidth(), container:GetHeight()
-      matchDimension = isSideAnchor and cH or cW
-    end
-    if matchDimension and matchDimension > 0 then
-      barWidth  = PixelSnap(matchDimension + sizeAdjust, effScale)
-      barHeight = PixelSnap((cfg.height or 20) * scale, effScale)
-      if isVertical then
-        barFrame:SetSize(barHeight, barWidth)
-      else
-        barFrame:SetSize(barWidth, barHeight)
-      end
-    end
-  end
-
-  barFrame:ClearAllPoints()
-  local matchSlots = cfg.matchGroupWidth and cfg.matchSlotsOnly and barWidth
-  if anchorPoint == "TOP" then
-    if matchSlots then
-      local halfWidth = PixelSnap(barWidth / 2, effScale)
-      barFrame:SetPoint("BOTTOMLEFT", container, "TOP", -halfWidth + offsetX, offsetY)
-    else
-      barFrame:SetPoint("BOTTOMLEFT", container, "TOPLEFT", offsetX, offsetY)
-    end
-  elseif anchorPoint == "BOTTOM" then
-    if matchSlots then
-      local halfWidth = PixelSnap(barWidth / 2, effScale)
-      barFrame:SetPoint("TOPLEFT", container, "BOTTOM", -halfWidth + offsetX, offsetY)
-    else
-      barFrame:SetPoint("TOPLEFT", container, "BOTTOMLEFT", offsetX, offsetY)
-    end
-  elseif anchorPoint == "LEFT" then
-    barFrame:SetPoint("RIGHT", container, "LEFT", offsetX, offsetY)
-  elseif anchorPoint == "RIGHT" then
-    barFrame:SetPoint("LEFT", container, "RIGHT", offsetX, offsetY)
-  end
+  BGA.ApplySizeAndAnchor(barFrame, groupName,
+      sourcePoint, destPoint,
+      barHeight,
+      BGA.PixelSnap(cfg.anchorOffsetX or 0, effScale),
+      BGA.PixelSnap(cfg.anchorOffsetY or 0, effScale),
+      cfg.matchGroupWidth, cfg.matchSlotsOnly,
+      isVertical,
+      cfg.matchWidthAdjust or 0, cfg.matchWidthAdjustPct or 0,
+      isVertical, -- needsSwap: vertical bars swap SetSize arguments
+      false) -- tracking bars have no matchIconEdges
+  -- [FORK] end
 end
 
 -- ===================================================================
