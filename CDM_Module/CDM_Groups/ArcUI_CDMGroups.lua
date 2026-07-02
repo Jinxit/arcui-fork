@@ -471,6 +471,14 @@ local function SafeEnhanceFrame(frame, cdID, viewerType, viewerName)
 end
 ns.CDMGroups.SafeEnhanceFrame = SafeEnhanceFrame
 
+-- [FORK] Effective icon settings can depend on group membership, so transfer
+-- paths must invalidate CDMEnhance after changing members and before styling.
+local function InvalidateCDMEnhanceEffectiveSettings()
+    if ns.CDMEnhance and ns.CDMEnhance.InvalidateEffectiveSettingsCache then
+        ns.CDMEnhance.InvalidateEffectiveSettingsCache()
+    end
+end
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- LAYOUT HELPERS - MOVED TO ArcUI_CDMGroups_Layout.lua
 -- GetSlotDimensions, SetupFrameInContainer, RefreshIconSettings,
@@ -860,6 +868,7 @@ local function MakeDefaultGroup(x, y, borderR, borderG, borderB)
             iconSize = 36,      -- Scale factor (36 = 100%)
             iconWidth = 36,     -- Base width in pixels
             iconHeight = 36,    -- Base height in pixels
+            iconAspectRatio = 1.0, -- [FORK] texture crop for all icons in group (1.0 = square)
             perRow = 4, 
             gridRows = 2, 
             gridCols = 4,
@@ -899,6 +908,7 @@ local function SerializeDefaultGroupToLayoutData(groupData)
         iconSize = groupData.layout and groupData.layout.iconSize or 36,
         iconWidth = groupData.layout and groupData.layout.iconWidth or 36,
         iconHeight = groupData.layout and groupData.layout.iconHeight or 36,
+        iconAspectRatio = groupData.layout and groupData.layout.iconAspectRatio or 1.0, -- [FORK]
         spacing = groupData.layout and groupData.layout.spacing or 2,
         spacingX = groupData.layout and groupData.layout.spacingX,
         spacingY = groupData.layout and groupData.layout.spacingY,
@@ -2662,6 +2672,7 @@ local function SerializeGroupToLayoutData(group)
         iconSize = group.layout and group.layout.iconSize or 36,
         iconWidth = group.layout and group.layout.iconWidth or 36,
         iconHeight = group.layout and group.layout.iconHeight or 36,
+        iconAspectRatio = group.layout and group.layout.iconAspectRatio or 1.0, -- [FORK]
         spacing = group.layout and group.layout.spacing or 2,
         spacingX = group.layout and group.layout.spacingX,
         spacingY = group.layout and group.layout.spacingY,
@@ -2994,6 +3005,7 @@ GetDefaultSpecData = function()
                                 iconSize = layoutData.iconSize or 36,
                                 iconWidth = layoutData.iconWidth or 36,
                                 iconHeight = layoutData.iconHeight or 36,
+                                iconAspectRatio = layoutData.iconAspectRatio or 1.0, -- [FORK]
                                 spacing = layoutData.spacing or 2,
                                 spacingX = layoutData.spacingX,
                                 spacingY = layoutData.spacingY,
@@ -3224,6 +3236,7 @@ local function EnsureLayoutProfiles(specData)
                         iconSize = group.layout.iconSize,
                         iconWidth = group.layout.iconWidth,
                         iconHeight = group.layout.iconHeight,
+                        iconAspectRatio = group.layout.iconAspectRatio, -- [FORK]
                         spacing = group.layout.spacing,
                         spacingX = group.layout.spacingX,
                         spacingY = group.layout.spacingY,
@@ -3646,6 +3659,7 @@ function ns.CDMGroups.CreateProfile(profileName)
                 iconSize = group.layout.iconSize,
                 iconWidth = group.layout.iconWidth,
                 iconHeight = group.layout.iconHeight,
+                iconAspectRatio = group.layout.iconAspectRatio, -- [FORK]
                 spacing = group.layout.spacing,
                 spacingX = group.layout.spacingX,
                 spacingY = group.layout.spacingY,
@@ -3965,6 +3979,7 @@ function ns.CDMGroups.SaveCurrentToProfile(profileName)
                 iconSize = group.layout.iconSize,
                 iconWidth = group.layout.iconWidth,
                 iconHeight = group.layout.iconHeight,
+                iconAspectRatio = group.layout.iconAspectRatio, -- [FORK]
                 spacing = group.layout.spacing,
                 spacingX = group.layout.spacingX,
                 spacingY = group.layout.spacingY,
@@ -4398,6 +4413,7 @@ function ns.CDMGroups.LoadProfile(profileName, skipActivation)
                     if layoutData.iconSize then newGroup.layout.iconSize = layoutData.iconSize end
                     if layoutData.iconWidth then newGroup.layout.iconWidth = layoutData.iconWidth end
                     if layoutData.iconHeight then newGroup.layout.iconHeight = layoutData.iconHeight end
+                    if layoutData.iconAspectRatio then newGroup.layout.iconAspectRatio = layoutData.iconAspectRatio end -- [FORK]
                     if layoutData.spacing then newGroup.layout.spacing = layoutData.spacing end
                 end
                 -- Position
@@ -4648,6 +4664,9 @@ function ns.CDMGroups.LoadProfile(profileName, skipActivation)
                 end
                 if layoutData.iconHeight ~= nil then
                     group.layout.iconHeight = layoutData.iconHeight
+                end
+                if layoutData.iconAspectRatio ~= nil then -- [FORK]
+                    group.layout.iconAspectRatio = layoutData.iconAspectRatio
                 end
                 if layoutData.spacing ~= nil then
                     group.layout.spacing = layoutData.spacing
@@ -6193,6 +6212,7 @@ local function OnSpecChange(newSpec, oldSpecOverride, skipSave)
                         iconSize = layoutData.iconSize or 36,
                         iconWidth = layoutData.iconWidth or 36,
                         iconHeight = layoutData.iconHeight or 36,
+                        iconAspectRatio = layoutData.iconAspectRatio or 1.0, -- [FORK]
                         spacing = layoutData.spacing or 2,
                         spacingX = layoutData.spacingX,
                         spacingY = layoutData.spacingY,
@@ -6200,7 +6220,7 @@ local function OnSpecChange(newSpec, oldSpecOverride, skipSave)
                         alignment = layoutData.alignment,
                     }
                 end
-                
+
                 -- Remove groups that are no longer in template
                 for groupName in pairs(profile.groupLayouts) do
                     if not template.groups[groupName] then
@@ -6680,6 +6700,7 @@ function ns.CDMGroups.CreateGroup(name)
             iconSize = layoutData.iconSize or 36,
             iconWidth = layoutData.iconWidth or 36,
             iconHeight = layoutData.iconHeight or 36,
+            iconAspectRatio = layoutData.iconAspectRatio or 1.0, -- [FORK]
             spacing = layoutData.spacing or 2,
             spacingX = layoutData.spacingX,
             spacingY = layoutData.spacingY,
@@ -7907,20 +7928,12 @@ function ns.CDMGroups.CreateGroup(name)
         -- Get viewerType for this cooldown
         local viewerType, defaultGroup, viewerName = GetViewerTypeForCooldownID(cooldownID)
         
-        -- Calculate effective icon dimensions for centering
+        -- Calculate default icon dimensions for centering. Per-icon overrides
+        -- are applied after membership is registered so group-dependent
+        -- effective settings resolve against this group.
         local slotW, slotH = GetSlotDimensions(self.layout)
         local effectiveW = slotW
         local effectiveH = slotH
-        if ns.CDMEnhance and ns.CDMEnhance.GetEffectiveIconSettings then
-            local cfg = ns.CDMEnhance.GetEffectiveIconSettings(cooldownID)
-            if cfg and cfg.useGroupScale == false then
-                local baseW = cfg.width or slotW
-                local baseH = cfg.height or slotH
-                local iconScale = cfg.scale or 1.0
-                effectiveW = baseW * iconScale
-                effectiveH = baseH * iconScale
-            end
-        end
         
         -- Create member entry - even without frame
         -- This allows AutoAssignNewIcons to give us the frame later
@@ -7936,6 +7949,21 @@ function ns.CDMGroups.CreateGroup(name)
             _effectiveIconW = effectiveW,
             _effectiveIconH = effectiveH,
         }
+
+        -- [FORK] Register membership before consulting CDMEnhance. The
+        -- effective aspect ratio cascade looks up grp.members[cooldownID].
+        self.members[cooldownID] = member
+        InvalidateCDMEnhanceEffectiveSettings()
+        if ns.CDMEnhance and ns.CDMEnhance.GetEffectiveIconSettings then
+            local cfg = ns.CDMEnhance.GetEffectiveIconSettings(cooldownID)
+            if cfg and cfg.useGroupScale == false then
+                local baseW = cfg.width or slotW
+                local baseH = cfg.height or slotH
+                local iconScale = cfg.scale or 1.0
+                member._effectiveIconW = baseW * iconScale
+                member._effectiveIconH = baseH * iconScale
+            end
+        end
         
         if frame then
             if not entry then
@@ -7972,6 +8000,11 @@ function ns.CDMGroups.CreateGroup(name)
             -- CRITICAL: Notify CDMEnhance so it updates its tracking
             SafeEnhanceFrame(frame, cooldownID, member.viewerType, member.originalViewerName)
         end
+
+        -- Keep collision/displacement handling from seeing the new member
+        -- before its grid slot is claimed below.
+        self.members[cooldownID] = nil
+        InvalidateCDMEnhanceEffectiveSettings()
         
         -- Check if something is at this position
         if self.grid[row] and self.grid[row][col] then
@@ -7998,6 +8031,8 @@ function ns.CDMGroups.CreateGroup(name)
                             member.col = col
                         else
                             -- No free slot - skip this icon for now
+                            self.members[cooldownID] = nil
+                            InvalidateCDMEnhanceEffectiveSettings()
                             return false
                         end
                     else
@@ -8008,6 +8043,8 @@ function ns.CDMGroups.CreateGroup(name)
                             self:MoveMemberTo(existingCdID, newRow, newCol)
                         else
                             -- No free slot available - can't place this icon
+                            self.members[cooldownID] = nil
+                            InvalidateCDMEnhanceEffectiveSettings()
                             return false
                         end
                     end
@@ -8019,6 +8056,7 @@ function ns.CDMGroups.CreateGroup(name)
         end
         
         self.members[cooldownID] = member
+        InvalidateCDMEnhanceEffectiveSettings()
         if not self.grid[row] then self.grid[row] = {} end
         self.grid[row][col] = cooldownID
         
@@ -8195,18 +8233,22 @@ function ns.CDMGroups.CreateGroup(name)
         frame._cdmgTargetPoint = nil
         frame._cdmgTargetRelPoint = nil
         
-        local slotW, slotH = GetSlotDimensions(self.layout)
-        local effectiveW, effectiveH = SetupFrameInContainer(frame, self.container, slotW, slotH, cooldownID)
-        
-        self.members[cooldownID] = {
+        local member = {
             frame = frame,
             entry = entry,
             row = row,
             col = col,
             targetParent = self.container,
-            _effectiveIconW = effectiveW,
-            _effectiveIconH = effectiveH,
+            _effectiveIconW = nil,
+            _effectiveIconH = nil,
         }
+        self.members[cooldownID] = member
+        InvalidateCDMEnhanceEffectiveSettings()
+
+        local slotW, slotH = GetSlotDimensions(self.layout)
+        local effectiveW, effectiveH = SetupFrameInContainer(frame, self.container, slotW, slotH, cooldownID)
+        member._effectiveIconW = effectiveW
+        member._effectiveIconH = effectiveH
         
         if not self.grid[row] then self.grid[row] = {} end
         self.grid[row][col] = cooldownID
@@ -8338,18 +8380,22 @@ function ns.CDMGroups.CreateGroup(name)
         frame._cdmgTargetPoint = nil
         frame._cdmgTargetRelPoint = nil
         
-        local slotW, slotH = GetSlotDimensions(self.layout)
-        local effectiveW, effectiveH = SetupFrameInContainer(frame, self.container, slotW, slotH, cooldownID)
-        
-        self.members[cooldownID] = {
+        local member = {
             frame = frame,
             entry = entry,
             row = row,
             col = insertCol,
             targetParent = self.container,
-            _effectiveIconW = effectiveW,
-            _effectiveIconH = effectiveH,
+            _effectiveIconW = nil,
+            _effectiveIconH = nil,
         }
+        self.members[cooldownID] = member
+        InvalidateCDMEnhanceEffectiveSettings()
+
+        local slotW, slotH = GetSlotDimensions(self.layout)
+        local effectiveW, effectiveH = SetupFrameInContainer(frame, self.container, slotW, slotH, cooldownID)
+        member._effectiveIconW = effectiveW
+        member._effectiveIconH = effectiveH
         
         if not self.grid[row] then self.grid[row] = {} end
         self.grid[row][insertCol] = cooldownID
@@ -10455,7 +10501,29 @@ function ns.CDMGroups.CreateGroup(name)
             ns.CDMGroups.TriggerTemplateAutoSave()
         end
     end
-    
+
+    -- [FORK] Set the group-level aspect ratio applied to all member icons (when useGroupScale is on)
+    function group:SetIconAspectRatio(ratio)
+        self.layout.iconAspectRatio = ratio
+        local db = getDB()
+        if db then db.iconAspectRatio = ratio end
+        -- Invalidate CDMEnhance settings cache and re-apply texture coords on all members
+        if ns.CDMEnhance then
+            if ns.CDMEnhance.InvalidateCache then ns.CDMEnhance.InvalidateCache() end
+            if ns.CDMEnhance.ApplyIconStyle then
+                for cdID, member in pairs(self.members) do
+                    if member.frame then
+                        ns.CDMEnhance.ApplyIconStyle(member.frame, cdID)
+                    end
+                end
+            end
+        end
+        -- Trigger auto-save to linked template
+        if ns.CDMGroups.TriggerTemplateAutoSave then
+            ns.CDMGroups.TriggerTemplateAutoSave()
+        end
+    end
+
     function group:SetSpacing(sp)
         self.layout.spacing = sp
         -- Also clear X/Y overrides so the base spacing applies
@@ -14789,6 +14857,7 @@ local function SaveGroupLayoutsToActiveProfile()
                 iconSize = group.layout.iconSize,
                 iconWidth = group.layout.iconWidth,
                 iconHeight = group.layout.iconHeight,
+                iconAspectRatio = group.layout.iconAspectRatio, -- [FORK]
                 spacing = group.layout.spacing,
                 spacingX = group.layout.spacingX,
                 spacingY = group.layout.spacingY,
