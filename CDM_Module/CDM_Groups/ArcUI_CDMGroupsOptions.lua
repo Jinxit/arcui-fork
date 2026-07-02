@@ -2259,6 +2259,25 @@ local function GetOptionsTable()
                     if g and num then g:SetIconHeight(num) end
                 end,
             },
+            -- [FORK] Group-level aspect ratio: applied to all members when useGroupScale is on
+            iconAspectRatio = {
+                type = "range",
+                name = "Aspect Ratio",
+                desc = "Adjusts icon shape for the whole group. 1 = square, higher = wider, lower = taller.\n\nApplied to icons that follow group scale (the default). Icons with custom scale use their own per-icon aspect ratio setting.\n\n|cffff9900Note:|r Disabled when Masque is active.",
+                order = 41.3,
+                min = 0.25, max = 2.5, step = 0.05,
+                width = 0.85,
+                hidden = function() return HideIfNoGroup() or collapsedSections.layout end,
+                disabled = function() return ns.Masque and ns.Masque.IsEnabled and ns.Masque.IsEnabled() end,
+                get = function()
+                    local g = GetSelectedGroup()
+                    return g and g.layout.iconAspectRatio or 1.0
+                end,
+                set = function(_, val)
+                    local g = GetSelectedGroup()
+                    if g then g:SetIconAspectRatio(val) end
+                end,
+            },
             spacing = {
                 type = "range",
                 name = "Spacing",

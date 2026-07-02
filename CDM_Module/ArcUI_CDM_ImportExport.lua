@@ -101,6 +101,7 @@ local function CopyLayoutData(src)
         iconSize             = src.iconSize or 36,
         iconWidth            = src.iconWidth or 36,
         iconHeight           = src.iconHeight or 36,
+        iconAspectRatio      = src.iconAspectRatio or 1.0, -- [FORK]
         spacing              = src.spacing or 2,
         spacingX             = src.spacingX,
         spacingY             = src.spacingY,
@@ -1023,6 +1024,7 @@ function IE.Import(importString, options)
                             iconSize = layout and layout.iconSize or 36,
                             iconWidth = layout and layout.iconWidth or 36,
                             iconHeight = layout and layout.iconHeight or 36,
+                            iconAspectRatio = layout and layout.iconAspectRatio or 1.0, -- [FORK]
                             spacing = layout and layout.spacing or 2,
                             spacingX = layout and layout.spacingX,
                             spacingY = layout and layout.spacingY,
@@ -2306,6 +2308,7 @@ function IE.SaveGroupTemplate(name, description, silent)
                 iconSize = group.layout.iconSize,
                 iconWidth = group.layout.iconWidth,
                 iconHeight = group.layout.iconHeight,
+                iconAspectRatio = group.layout.iconAspectRatio, -- [FORK]
                 spacing = group.layout.spacing,
                 spacingX = group.layout.spacingX,
                 spacingY = group.layout.spacingY,
@@ -2945,6 +2948,7 @@ function IE.SaveSpecAsTemplate(layoutKey, templateName)
             iconSize = layout.iconSize or 36,
             iconWidth = layout.iconWidth or 36,
             iconHeight = layout.iconHeight or 36,
+            iconAspectRatio = layout.iconAspectRatio or 1.0, -- [FORK]
             spacing = layout.spacing or 2,
             spacingX = layout.spacingX,
             spacingY = layout.spacingY,

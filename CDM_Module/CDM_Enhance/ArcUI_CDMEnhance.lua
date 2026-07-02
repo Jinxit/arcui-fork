@@ -1217,7 +1217,21 @@ local function GetEffectiveIconSettings(cooldownID)
   -- Store CDM category info in config (avoids duplicate API calls in ApplyCooldownStateVisuals)
   effective._isAura = isAura
   effective._spellID = spellID
-  
+
+  -- [FORK] GROUP ASPECT RATIO: when the icon follows its group (useGroupScale ~= false),
+  -- override aspectRatio with the group's iconAspectRatio (if it differs from 1.0).
+  if effective.useGroupScale ~= false and ns.CDMGroups and ns.CDMGroups.groups then
+    for _, grp in pairs(ns.CDMGroups.groups) do
+      if grp.members and grp.members[cooldownID] then
+        local groupRatio = grp.layout and grp.layout.iconAspectRatio
+        if groupRatio and groupRatio ~= 1.0 then
+          effective.aspectRatio = groupRatio
+        end
+        break
+      end
+    end
+  end
+
   -- MASQUE COMPATIBILITY: When Masque skinning is enabled, force defaults for appearance settings
   -- Masque controls icon borders/textures, so ArcUI shouldn't apply zoom/padding/aspectRatio
   -- Check requires: ns.Masque exists, IsEnabled function exists, AND IsEnabled() returns true

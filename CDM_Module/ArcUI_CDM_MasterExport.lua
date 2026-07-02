@@ -805,6 +805,7 @@ local function MergeProfilesIntoSpec(cdmGroupsDB, specKey, specEntry, sourceLabe
                         iconSize = layout and layout.iconSize or 36,
                         iconWidth = layout and layout.iconWidth or 36,
                         iconHeight = layout and layout.iconHeight or 36,
+                        iconAspectRatio = layout and layout.iconAspectRatio or 1.0, -- [FORK]
                         spacing = layout and layout.spacing or 2,
                         spacingX = layout and layout.spacingX,
                         spacingY = layout and layout.spacingY,
