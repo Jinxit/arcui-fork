@@ -471,6 +471,14 @@ local function SafeEnhanceFrame(frame, cdID, viewerType, viewerName)
 end
 ns.CDMGroups.SafeEnhanceFrame = SafeEnhanceFrame
 
+-- [FORK] Effective icon settings can depend on group membership, so transfer
+-- paths must invalidate CDMEnhance after changing members and before styling.
+local function InvalidateCDMEnhanceEffectiveSettings()
+    if ns.CDMEnhance and ns.CDMEnhance.InvalidateEffectiveSettingsCache then
+        ns.CDMEnhance.InvalidateEffectiveSettingsCache()
+    end
+end
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- LAYOUT HELPERS - MOVED TO ArcUI_CDMGroups_Layout.lua
 -- GetSlotDimensions, SetupFrameInContainer, RefreshIconSettings,
@@ -7920,20 +7928,12 @@ function ns.CDMGroups.CreateGroup(name)
         -- Get viewerType for this cooldown
         local viewerType, defaultGroup, viewerName = GetViewerTypeForCooldownID(cooldownID)
         
-        -- Calculate effective icon dimensions for centering
+        -- Calculate default icon dimensions for centering. Per-icon overrides
+        -- are applied after membership is registered so group-dependent
+        -- effective settings resolve against this group.
         local slotW, slotH = GetSlotDimensions(self.layout)
         local effectiveW = slotW
         local effectiveH = slotH
-        if ns.CDMEnhance and ns.CDMEnhance.GetEffectiveIconSettings then
-            local cfg = ns.CDMEnhance.GetEffectiveIconSettings(cooldownID)
-            if cfg and cfg.useGroupScale == false then
-                local baseW = cfg.width or slotW
-                local baseH = cfg.height or slotH
-                local iconScale = cfg.scale or 1.0
-                effectiveW = baseW * iconScale
-                effectiveH = baseH * iconScale
-            end
-        end
         
         -- Create member entry - even without frame
         -- This allows AutoAssignNewIcons to give us the frame later
@@ -7949,6 +7949,21 @@ function ns.CDMGroups.CreateGroup(name)
             _effectiveIconW = effectiveW,
             _effectiveIconH = effectiveH,
         }
+
+        -- [FORK] Register membership before consulting CDMEnhance. The
+        -- effective aspect ratio cascade looks up grp.members[cooldownID].
+        self.members[cooldownID] = member
+        InvalidateCDMEnhanceEffectiveSettings()
+        if ns.CDMEnhance and ns.CDMEnhance.GetEffectiveIconSettings then
+            local cfg = ns.CDMEnhance.GetEffectiveIconSettings(cooldownID)
+            if cfg and cfg.useGroupScale == false then
+                local baseW = cfg.width or slotW
+                local baseH = cfg.height or slotH
+                local iconScale = cfg.scale or 1.0
+                member._effectiveIconW = baseW * iconScale
+                member._effectiveIconH = baseH * iconScale
+            end
+        end
         
         if frame then
             if not entry then
@@ -7985,6 +8000,11 @@ function ns.CDMGroups.CreateGroup(name)
             -- CRITICAL: Notify CDMEnhance so it updates its tracking
             SafeEnhanceFrame(frame, cooldownID, member.viewerType, member.originalViewerName)
         end
+
+        -- Keep collision/displacement handling from seeing the new member
+        -- before its grid slot is claimed below.
+        self.members[cooldownID] = nil
+        InvalidateCDMEnhanceEffectiveSettings()
         
         -- Check if something is at this position
         if self.grid[row] and self.grid[row][col] then
@@ -8011,6 +8031,8 @@ function ns.CDMGroups.CreateGroup(name)
                             member.col = col
                         else
                             -- No free slot - skip this icon for now
+                            self.members[cooldownID] = nil
+                            InvalidateCDMEnhanceEffectiveSettings()
                             return false
                         end
                     else
@@ -8021,6 +8043,8 @@ function ns.CDMGroups.CreateGroup(name)
                             self:MoveMemberTo(existingCdID, newRow, newCol)
                         else
                             -- No free slot available - can't place this icon
+                            self.members[cooldownID] = nil
+                            InvalidateCDMEnhanceEffectiveSettings()
                             return false
                         end
                     end
@@ -8032,6 +8056,7 @@ function ns.CDMGroups.CreateGroup(name)
         end
         
         self.members[cooldownID] = member
+        InvalidateCDMEnhanceEffectiveSettings()
         if not self.grid[row] then self.grid[row] = {} end
         self.grid[row][col] = cooldownID
         
@@ -8208,18 +8233,22 @@ function ns.CDMGroups.CreateGroup(name)
         frame._cdmgTargetPoint = nil
         frame._cdmgTargetRelPoint = nil
         
-        local slotW, slotH = GetSlotDimensions(self.layout)
-        local effectiveW, effectiveH = SetupFrameInContainer(frame, self.container, slotW, slotH, cooldownID)
-        
-        self.members[cooldownID] = {
+        local member = {
             frame = frame,
             entry = entry,
             row = row,
             col = col,
             targetParent = self.container,
-            _effectiveIconW = effectiveW,
-            _effectiveIconH = effectiveH,
+            _effectiveIconW = nil,
+            _effectiveIconH = nil,
         }
+        self.members[cooldownID] = member
+        InvalidateCDMEnhanceEffectiveSettings()
+
+        local slotW, slotH = GetSlotDimensions(self.layout)
+        local effectiveW, effectiveH = SetupFrameInContainer(frame, self.container, slotW, slotH, cooldownID)
+        member._effectiveIconW = effectiveW
+        member._effectiveIconH = effectiveH
         
         if not self.grid[row] then self.grid[row] = {} end
         self.grid[row][col] = cooldownID
@@ -8351,18 +8380,22 @@ function ns.CDMGroups.CreateGroup(name)
         frame._cdmgTargetPoint = nil
         frame._cdmgTargetRelPoint = nil
         
-        local slotW, slotH = GetSlotDimensions(self.layout)
-        local effectiveW, effectiveH = SetupFrameInContainer(frame, self.container, slotW, slotH, cooldownID)
-        
-        self.members[cooldownID] = {
+        local member = {
             frame = frame,
             entry = entry,
             row = row,
             col = insertCol,
             targetParent = self.container,
-            _effectiveIconW = effectiveW,
-            _effectiveIconH = effectiveH,
+            _effectiveIconW = nil,
+            _effectiveIconH = nil,
         }
+        self.members[cooldownID] = member
+        InvalidateCDMEnhanceEffectiveSettings()
+
+        local slotW, slotH = GetSlotDimensions(self.layout)
+        local effectiveW, effectiveH = SetupFrameInContainer(frame, self.container, slotW, slotH, cooldownID)
+        member._effectiveIconW = effectiveW
+        member._effectiveIconH = effectiveH
         
         if not self.grid[row] then self.grid[row] = {} end
         self.grid[row][insertCol] = cooldownID

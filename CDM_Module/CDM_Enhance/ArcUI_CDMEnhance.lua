@@ -7926,6 +7926,11 @@ function ns.CDMEnhance.GetEffectiveIconSettings(cdID)
   return GetEffectiveIconSettings(cdID)
 end
 
+-- [FORK] Group membership affects the effective aspect-ratio cascade.
+function ns.CDMEnhance.InvalidateEffectiveSettingsCache()
+  InvalidateEffectiveSettingsCache()
+end
+
 -- Get or create per-icon settings (for setters - creates sparse entry when needed)
 function ns.CDMEnhance.GetOrCreateIconSettings(cdID)
   return GetOrCreateIconSettings(cdID)
