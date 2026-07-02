@@ -2203,7 +2203,12 @@ local function GetOptionsTable()
                 end,
                 set = function(_, val)
                     local g = GetSelectedGroup()
-                    if g then g:SetIconWidth(val) end
+                    if g then
+                        g:SetIconWidth(val)
+                        if g.layout.keepAspectRatio then -- [FORK]
+                            g:SetIconAspectRatio(g.layout.iconWidth / g.layout.iconHeight)
+                        end
+                    end
                 end,
             },
             iconWidthInput = {
@@ -2221,7 +2226,12 @@ local function GetOptionsTable()
                 set = function(_, val)
                     local g = GetSelectedGroup()
                     local num = tonumber(val)
-                    if g and num then g:SetIconWidth(num) end
+                    if g and num then
+                        g:SetIconWidth(num)
+                        if g.layout.keepAspectRatio then -- [FORK]
+                            g:SetIconAspectRatio(g.layout.iconWidth / g.layout.iconHeight)
+                        end
+                    end
                 end,
             },
             iconHeight = {
@@ -2238,7 +2248,12 @@ local function GetOptionsTable()
                 end,
                 set = function(_, val)
                     local g = GetSelectedGroup()
-                    if g then g:SetIconHeight(val) end
+                    if g then
+                        g:SetIconHeight(val)
+                        if g.layout.keepAspectRatio then -- [FORK]
+                            g:SetIconAspectRatio(g.layout.iconWidth / g.layout.iconHeight)
+                        end
+                    end
                 end,
             },
             iconHeightInput = {
@@ -2256,7 +2271,37 @@ local function GetOptionsTable()
                 set = function(_, val)
                     local g = GetSelectedGroup()
                     local num = tonumber(val)
-                    if g and num then g:SetIconHeight(num) end
+                    if g and num then
+                        g:SetIconHeight(num)
+                        if g.layout.keepAspectRatio then -- [FORK]
+                            g:SetIconAspectRatio(g.layout.iconWidth / g.layout.iconHeight)
+                        end
+                    end
+                end,
+            },
+            -- [FORK] Keep Aspect Ratio: auto-syncs iconAspectRatio with iconWidth/iconHeight
+            keepAspectRatio = {
+                type = "toggle",
+                name = "Keep Aspect Ratio",
+                desc = "When enabled, changing Width or Height automatically updates Aspect Ratio to match, preventing texture stretching.",
+                order = 41.25,
+                width = "full",
+                hidden = function() return HideIfNoGroup() or collapsedSections.layout end,
+                get = function()
+                    local g = GetSelectedGroup()
+                    return g and g.layout.keepAspectRatio or false
+                end,
+                set = function(_, val)
+                    local g = GetSelectedGroup()
+                    if g then
+                        g.layout.keepAspectRatio = val
+                        if ns.CDMGroups.SaveGroupLayoutToProfile then
+                            ns.CDMGroups.SaveGroupLayoutToProfile(g.name, g)
+                        end
+                        if val then
+                            g:SetIconAspectRatio(g.layout.iconWidth / g.layout.iconHeight)
+                        end
+                    end
                 end,
             },
             -- [FORK] Group-level aspect ratio: applied to all members when useGroupScale is on
@@ -2268,7 +2313,11 @@ local function GetOptionsTable()
                 min = 0.25, max = 2.5, step = 0.05,
                 width = 0.85,
                 hidden = function() return HideIfNoGroup() or collapsedSections.layout end,
-                disabled = function() return ns.Masque and ns.Masque.IsEnabled and ns.Masque.IsEnabled() end,
+                disabled = function() -- [FORK] also disabled when keepAspectRatio is driving it
+                    local g = GetSelectedGroup()
+                    if g and g.layout.keepAspectRatio then return true end
+                    return ns.Masque and ns.Masque.IsEnabled and ns.Masque.IsEnabled()
+                end,
                 get = function()
                     local g = GetSelectedGroup()
                     return g and g.layout.iconAspectRatio or 1.0
