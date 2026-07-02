@@ -869,7 +869,8 @@ local function MakeDefaultGroup(x, y, borderR, borderG, borderB)
             iconWidth = 36,     -- Base width in pixels
             iconHeight = 36,    -- Base height in pixels
             iconAspectRatio = 1.0, -- [FORK] texture crop for all icons in group (1.0 = square)
-            perRow = 4, 
+            keepAspectRatio = false, -- [FORK] auto-sync iconAspectRatio with iconWidth/iconHeight
+            perRow = 4,
             gridRows = 2, 
             gridCols = 4,
         },
@@ -909,6 +910,7 @@ local function SerializeDefaultGroupToLayoutData(groupData)
         iconWidth = groupData.layout and groupData.layout.iconWidth or 36,
         iconHeight = groupData.layout and groupData.layout.iconHeight or 36,
         iconAspectRatio = groupData.layout and groupData.layout.iconAspectRatio or 1.0, -- [FORK]
+        keepAspectRatio = groupData.layout and groupData.layout.keepAspectRatio or false, -- [FORK]
         spacing = groupData.layout and groupData.layout.spacing or 2,
         spacingX = groupData.layout and groupData.layout.spacingX,
         spacingY = groupData.layout and groupData.layout.spacingY,
@@ -2673,6 +2675,7 @@ local function SerializeGroupToLayoutData(group)
         iconWidth = group.layout and group.layout.iconWidth or 36,
         iconHeight = group.layout and group.layout.iconHeight or 36,
         iconAspectRatio = group.layout and group.layout.iconAspectRatio or 1.0, -- [FORK]
+        keepAspectRatio = group.layout and group.layout.keepAspectRatio or false, -- [FORK]
         spacing = group.layout and group.layout.spacing or 2,
         spacingX = group.layout and group.layout.spacingX,
         spacingY = group.layout and group.layout.spacingY,
@@ -3006,6 +3009,7 @@ GetDefaultSpecData = function()
                                 iconWidth = layoutData.iconWidth or 36,
                                 iconHeight = layoutData.iconHeight or 36,
                                 iconAspectRatio = layoutData.iconAspectRatio or 1.0, -- [FORK]
+                                keepAspectRatio = layoutData.keepAspectRatio or false, -- [FORK]
                                 spacing = layoutData.spacing or 2,
                                 spacingX = layoutData.spacingX,
                                 spacingY = layoutData.spacingY,
@@ -3237,6 +3241,7 @@ local function EnsureLayoutProfiles(specData)
                         iconWidth = group.layout.iconWidth,
                         iconHeight = group.layout.iconHeight,
                         iconAspectRatio = group.layout.iconAspectRatio, -- [FORK]
+                        keepAspectRatio = group.layout.keepAspectRatio, -- [FORK]
                         spacing = group.layout.spacing,
                         spacingX = group.layout.spacingX,
                         spacingY = group.layout.spacingY,
@@ -3660,6 +3665,7 @@ function ns.CDMGroups.CreateProfile(profileName)
                 iconWidth = group.layout.iconWidth,
                 iconHeight = group.layout.iconHeight,
                 iconAspectRatio = group.layout.iconAspectRatio, -- [FORK]
+                keepAspectRatio = group.layout.keepAspectRatio, -- [FORK]
                 spacing = group.layout.spacing,
                 spacingX = group.layout.spacingX,
                 spacingY = group.layout.spacingY,
@@ -3980,6 +3986,7 @@ function ns.CDMGroups.SaveCurrentToProfile(profileName)
                 iconWidth = group.layout.iconWidth,
                 iconHeight = group.layout.iconHeight,
                 iconAspectRatio = group.layout.iconAspectRatio, -- [FORK]
+                keepAspectRatio = group.layout.keepAspectRatio, -- [FORK]
                 spacing = group.layout.spacing,
                 spacingX = group.layout.spacingX,
                 spacingY = group.layout.spacingY,
@@ -4414,6 +4421,7 @@ function ns.CDMGroups.LoadProfile(profileName, skipActivation)
                     if layoutData.iconWidth then newGroup.layout.iconWidth = layoutData.iconWidth end
                     if layoutData.iconHeight then newGroup.layout.iconHeight = layoutData.iconHeight end
                     if layoutData.iconAspectRatio then newGroup.layout.iconAspectRatio = layoutData.iconAspectRatio end -- [FORK]
+                    if layoutData.keepAspectRatio ~= nil then newGroup.layout.keepAspectRatio = layoutData.keepAspectRatio end -- [FORK]
                     if layoutData.spacing then newGroup.layout.spacing = layoutData.spacing end
                 end
                 -- Position
@@ -4667,6 +4675,9 @@ function ns.CDMGroups.LoadProfile(profileName, skipActivation)
                 end
                 if layoutData.iconAspectRatio ~= nil then -- [FORK]
                     group.layout.iconAspectRatio = layoutData.iconAspectRatio
+                end
+                if layoutData.keepAspectRatio ~= nil then -- [FORK]
+                    group.layout.keepAspectRatio = layoutData.keepAspectRatio
                 end
                 if layoutData.spacing ~= nil then
                     group.layout.spacing = layoutData.spacing
@@ -6213,6 +6224,7 @@ local function OnSpecChange(newSpec, oldSpecOverride, skipSave)
                         iconWidth = layoutData.iconWidth or 36,
                         iconHeight = layoutData.iconHeight or 36,
                         iconAspectRatio = layoutData.iconAspectRatio or 1.0, -- [FORK]
+                        keepAspectRatio = layoutData.keepAspectRatio or false, -- [FORK]
                         spacing = layoutData.spacing or 2,
                         spacingX = layoutData.spacingX,
                         spacingY = layoutData.spacingY,
@@ -6701,6 +6713,7 @@ function ns.CDMGroups.CreateGroup(name)
             iconWidth = layoutData.iconWidth or 36,
             iconHeight = layoutData.iconHeight or 36,
             iconAspectRatio = layoutData.iconAspectRatio or 1.0, -- [FORK]
+            keepAspectRatio = layoutData.keepAspectRatio or false, -- [FORK]
             spacing = layoutData.spacing or 2,
             spacingX = layoutData.spacingX,
             spacingY = layoutData.spacingY,
@@ -14858,6 +14871,7 @@ local function SaveGroupLayoutsToActiveProfile()
                 iconWidth = group.layout.iconWidth,
                 iconHeight = group.layout.iconHeight,
                 iconAspectRatio = group.layout.iconAspectRatio, -- [FORK]
+                keepAspectRatio = group.layout.keepAspectRatio, -- [FORK]
                 spacing = group.layout.spacing,
                 spacingX = group.layout.spacingX,
                 spacingY = group.layout.spacingY,
