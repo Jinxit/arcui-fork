@@ -328,6 +328,7 @@ globals = {
   "GetPlayerFacing",
   "PlaySound",
   "PlaySoundFile",
+  "SOUNDKIT",
   "RAID_CLASS_COLORS",
   "ReloadUI",
   "SendChatMessage",
