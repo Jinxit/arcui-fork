@@ -1549,7 +1549,8 @@ function ArcAurasCooldown.ShowFrame(arcID)
     }
     local frame = ArcAuras.CreateFrame(arcID, spellConfig)
     if frame then
-        frame:Show()
+        ArcAuras.LoadFramePosition(arcID, frame)
+        ArcAuras.ShowUnlessTrackerAnchorHidden(frame)
         ArcAurasCooldown.InitializeSpellFrame(arcID, frame, spellConfig)
     end
 end
@@ -1589,7 +1590,7 @@ function ArcAurasCooldown.AddTrackedSpell(spellID)
         local frame = ArcAuras.CreateFrame(arcID, spellConfig)
         if frame then
             ArcAuras.LoadFramePosition(arcID, frame)
-            frame:Show()
+            ArcAuras.ShowUnlessTrackerAnchorHidden(frame)
             ArcAurasCooldown.InitializeSpellFrame(arcID, frame, spellConfig)
         end
     elseif not PlayerKnowsSpell(spellID) then

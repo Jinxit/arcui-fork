@@ -1074,7 +1074,7 @@ function ns.GetArcAurasOptionsTable()
                     local frame = ArcAuras.CreateFrame(arcID, spellConfig)
                     if frame then
                         ArcAuras.LoadFramePosition(arcID, frame)
-                        frame:Show()
+                        ArcAuras.ShowUnlessTrackerAnchorHidden(frame)
                         if ns.ArcAurasCooldown and ns.ArcAurasCooldown.InitializeSpellFrame then
                             ns.ArcAurasCooldown.InitializeSpellFrame(arcID, frame, spellConfig)
                         end

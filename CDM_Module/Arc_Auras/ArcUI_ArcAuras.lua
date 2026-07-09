@@ -201,6 +201,11 @@ ShowUnlessTrackerAnchorHidden = function(frame)
     return false
 end
 
+-- [FORK] Tracker anchor: shared show path for Arc Aura submodules (issue #40).
+function ArcAuras.ShowUnlessTrackerAnchorHidden(frame)
+    return ShowUnlessTrackerAnchorHidden(frame)
+end
+
 -- Global bridge for GlowDebugger (debug only)
 _G.ArcUI_ArcAuras = ArcAuras
 
