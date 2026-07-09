@@ -51,6 +51,64 @@ local hookedTargetFrames = {}
 -- Re-entry guard when our own SetPoint triggers a hook
 local isApplying = false
 
+local DEFAULT_SOURCE_Z = {
+    buffBarIcon = { strata = "MEDIUM", level = 250 },
+}
+
+local function RememberSourceZ(kind, sourceFrame)
+    if not sourceFrame then return end
+    if not sourceFrame._trackerAnchorDefaultStrata then
+        local defaults = DEFAULT_SOURCE_Z[kind]
+        sourceFrame._trackerAnchorDefaultStrata = defaults and defaults.strata or sourceFrame:GetFrameStrata()
+    end
+    if not sourceFrame._trackerAnchorDefaultLevel then
+        local defaults = DEFAULT_SOURCE_Z[kind]
+        sourceFrame._trackerAnchorDefaultLevel = defaults and defaults.level or sourceFrame:GetFrameLevel()
+    end
+end
+
+local function RefreshSourceVisibility(kind, key)
+    if kind == "buffBarIcon" then
+        local barNumber = tonumber(key)
+        if barNumber then
+            if ns.API and ns.API.RefreshDisplay then
+                ns.API.RefreshDisplay(barNumber)
+            elseif ns.Display and ns.Display.UpdateBar then
+                ns.Display.UpdateBar(barNumber)
+            end
+        end
+    elseif kind == "arcAura" then
+        if ns.ArcAuras and ns.ArcAuras.RefreshVisibility then
+            ns.ArcAuras.RefreshVisibility()
+        end
+    end
+end
+
+local function ApplyRegisteredSource(record)
+    if not record or not record.frame then return false end
+    local wasAnchorHidden = record.frame._trackerAnchorHidden
+    local handled = TA.Apply(record.frame, record.cfg)
+    if wasAnchorHidden and not record.frame._trackerAnchorHidden then
+        RefreshSourceVisibility(record.kind, record.key)
+    end
+    return handled
+end
+
+function TA.IsAnchorHidden(frame)
+    return frame and frame._trackerAnchorHidden == true
+end
+
+function TA.RestoreSourceFrame(frame)
+    if not frame then return end
+    frame._trackerAnchorHidden = nil
+    if frame._trackerAnchorDefaultStrata then
+        frame:SetFrameStrata(frame._trackerAnchorDefaultStrata)
+    end
+    if frame._trackerAnchorDefaultLevel then
+        frame:SetFrameLevel(frame._trackerAnchorDefaultLevel)
+    end
+end
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- RESOLVER
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -181,13 +239,16 @@ end
 -- Called by Display.lua (buff bar icon) and ArcAuras.LoadFramePosition.
 -- ═══════════════════════════════════════════════════════════════════════════
 function TA.RegisterSource(kind, key, sourceFrame, anchorCfg)
+    if not sourceFrame or not anchorCfg then return end
+    RememberSourceZ(kind, sourceFrame)
+
     local sourceKey = kind .. "|" .. tostring(key)
     activeSources[sourceKey] = { kind = kind, key = key, frame = sourceFrame, cfg = anchorCfg }
 
     -- Hook target visibility so source hides/re-shows when target appears/disappears.
     local targetFrame = TA.Resolve(anchorCfg.anchorTargetKind, anchorCfg.anchorTargetKey)
     if targetFrame then
-        TA.HookTarget(targetFrame, sourceFrame, anchorCfg)
+        TA.HookTarget(targetFrame, sourceFrame, anchorCfg, sourceKey)
     end
 end
 
@@ -196,14 +257,18 @@ end
 -- ═══════════════════════════════════════════════════════════════════════════
 function TA.UnregisterSource(kind, key)
     local sourceKey = kind .. "|" .. tostring(key)
+    local record = activeSources[sourceKey]
     activeSources[sourceKey] = nil
+    if record and record.frame then
+        TA.RestoreSourceFrame(record.frame)
+    end
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- HOOK TARGET: Watch target frame visibility changes.
 -- One hook per (targetFrame, sourceFrame) pair — guards against re-hooking.
 -- ═══════════════════════════════════════════════════════════════════════════
-function TA.HookTarget(targetFrame, sourceFrame, anchorCfg)
+function TA.HookTarget(targetFrame, sourceFrame, anchorCfg, sourceKey)
     if not targetFrame or not sourceFrame then return end
 
     -- Key by both frames to allow multiple sources watching the same target.
@@ -215,9 +280,12 @@ function TA.HookTarget(targetFrame, sourceFrame, anchorCfg)
         if isApplying then return end
         isApplying = true
         if sourceFrame and sourceFrame:GetParent() then  -- still alive
-            TA.Apply(sourceFrame, anchorCfg)
-            -- If the source was hidden by us, let normal tracker logic re-show it.
-            -- We only position/strata here; visibility is the tracker's job.
+            local record = sourceKey and activeSources[sourceKey]
+            if record then
+                ApplyRegisteredSource(record)
+            else
+                TA.Apply(sourceFrame, anchorCfg)
+            end
         end
         isApplying = false
     end)
@@ -226,7 +294,12 @@ function TA.HookTarget(targetFrame, sourceFrame, anchorCfg)
         if isApplying then return end
         isApplying = true
         if sourceFrame and sourceFrame:GetParent() then
-            TA.Apply(sourceFrame, anchorCfg)
+            local record = sourceKey and activeSources[sourceKey]
+            if record then
+                ApplyRegisteredSource(record)
+            else
+                TA.Apply(sourceFrame, anchorCfg)
+            end
         end
         isApplying = false
     end)
@@ -247,11 +320,17 @@ function TA.ReapplyAll()
             if barConfig and barConfig.display and barConfig.display.anchorToTracker then
                 local iconFrame = _G["ArcUIIconFrame" .. tostring(barNumber)]
                 if iconFrame then
-                    TA.Apply(iconFrame, barConfig.display)
+                    local sourceKey = "buffBarIcon|" .. tostring(barNumber)
+                    local record = activeSources[sourceKey]
+                    if record then
+                        ApplyRegisteredSource(record)
+                    else
+                        TA.Apply(iconFrame, barConfig.display)
+                    end
                     local targetFrame = TA.Resolve(
                         barConfig.display.anchorTargetKind, barConfig.display.anchorTargetKey)
                     if targetFrame then
-                        TA.HookTarget(targetFrame, iconFrame, barConfig.display)
+                        TA.HookTarget(targetFrame, iconFrame, barConfig.display, sourceKey)
                     end
                 end
             end
@@ -266,11 +345,17 @@ function TA.ReapplyAll()
                 if anchorCfg and anchorCfg.anchorToTracker then
                     local frame = ns.ArcAuras.GetFrame and ns.ArcAuras.GetFrame(arcID)
                     if frame then
-                        TA.Apply(frame, anchorCfg)
+                        local sourceKey = "arcAura|" .. tostring(arcID)
+                        local record = activeSources[sourceKey]
+                        if record then
+                            ApplyRegisteredSource(record)
+                        else
+                            TA.Apply(frame, anchorCfg)
+                        end
                         local targetFrame = TA.Resolve(
                             anchorCfg.anchorTargetKind, anchorCfg.anchorTargetKey)
                         if targetFrame then
-                            TA.HookTarget(targetFrame, frame, anchorCfg)
+                            TA.HookTarget(targetFrame, frame, anchorCfg, sourceKey)
                         end
                     end
                 end

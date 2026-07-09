@@ -108,7 +108,19 @@ local function SafeHide(frame)
 end
 
 local function SafeShow(frame)
+    if frame and ns.TrackerAnchors and ns.TrackerAnchors.IsAnchorHidden and ns.TrackerAnchors.IsAnchorHidden(frame) then
+        return
+    end
     if frame and not frame:IsShown() then
+        frame:Show()
+    end
+end
+
+local function SafeShowIconFrame(frame)
+    if frame and ns.TrackerAnchors and ns.TrackerAnchors.IsAnchorHidden and ns.TrackerAnchors.IsAnchorHidden(frame) then
+        return
+    end
+    if frame then
         frame:Show()
     end
 end
@@ -2112,7 +2124,7 @@ function ns.Display.UpdateBar(barNumber, stacks, maxStacks, active, durationFont
           if nameFrame then nameFrame:Hide() end
           if barIconFrame then barIconFrame:Hide() end
           
-          iconFrame:Show()
+          SafeShowIconFrame(iconFrame)
           if iconFrame.trackingFailOverlay then
             iconFrame.trackingFailOverlay:Show()
           end
@@ -2153,7 +2165,7 @@ function ns.Display.UpdateBar(barNumber, stacks, maxStacks, active, durationFont
         if barIconFrame then barIconFrame:Hide() end
         HideMultiIconFrames(barNumber)
         
-        iconFrame:Show()
+        SafeShowIconFrame(iconFrame)
         if iconFrame.missingSetupOverlay then
           iconFrame.missingSetupOverlay:Show()
         end
@@ -3576,7 +3588,7 @@ function ns.Display.UpdateDurationBar(barNumber, stacks, maxStacks, active, sour
         if nameFrame then nameFrame:Hide() end
         if barIconFrame then barIconFrame:Hide() end
         
-        iconFrame:Show()
+        SafeShowIconFrame(iconFrame)
         if iconFrame.missingSetupOverlay then
           iconFrame.missingSetupOverlay:Show()
         end
@@ -3610,7 +3622,7 @@ function ns.Display.UpdateDurationBar(barNumber, stacks, maxStacks, active, sour
         if nameFrame then nameFrame:Hide() end
         if barIconFrame then barIconFrame:Hide() end
         
-        iconFrame:Show()
+        SafeShowIconFrame(iconFrame)
         if iconFrame.trackingFailOverlay then
           iconFrame.trackingFailOverlay:Show()
         end
@@ -5161,13 +5173,20 @@ function ns.Display.ApplyAppearance(barNumber)
     local iconFrame = ns.Display.GetIconFrame and ns.Display.GetIconFrame(barNumber)
     if iconFrame then
       if cfg.anchorToTracker and ns.TrackerAnchors then
-        ns.TrackerAnchors.Apply(iconFrame, cfg)
         ns.TrackerAnchors.RegisterSource("buffBarIcon", tostring(barNumber), iconFrame, cfg)
+        ns.TrackerAnchors.Apply(iconFrame, cfg)
       elseif cfg.iconPosition then
+        if ns.TrackerAnchors then
+          ns.TrackerAnchors.UnregisterSource("buffBarIcon", tostring(barNumber))
+          ns.TrackerAnchors.RestoreSourceFrame(iconFrame)
+        end
         iconFrame:ClearAllPoints()
         PixelUtil.SetPoint(iconFrame,
           cfg.iconPosition.point, UIParent, cfg.iconPosition.relPoint,
           cfg.iconPosition.x, cfg.iconPosition.y)
+      elseif ns.TrackerAnchors then
+        ns.TrackerAnchors.UnregisterSource("buffBarIcon", tostring(barNumber))
+        ns.TrackerAnchors.RestoreSourceFrame(iconFrame)
       end
     end
   end
