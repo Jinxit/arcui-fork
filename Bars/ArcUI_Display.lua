@@ -5154,6 +5154,24 @@ function ns.Display.ApplyAppearance(barNumber)
     end
   end
   
+  -- [FORK] Icon mode: apply saved position or tracker anchor (issue #40).
+  -- This is the only place icon frame position is applied on config change;
+  -- drag-end saves to cfg.iconPosition which is applied here.
+  if displayType == "icon" then
+    local iconFrame = ns.Display.GetIconFrame and ns.Display.GetIconFrame(barNumber)
+    if iconFrame then
+      if cfg.anchorToTracker and ns.TrackerAnchors then
+        ns.TrackerAnchors.Apply(iconFrame, cfg)
+        ns.TrackerAnchors.RegisterSource("buffBarIcon", tostring(barNumber), iconFrame, cfg)
+      elseif cfg.iconPosition then
+        iconFrame:ClearAllPoints()
+        PixelUtil.SetPoint(iconFrame,
+          cfg.iconPosition.point, UIParent, cfg.iconPosition.relPoint,
+          cfg.iconPosition.x, cfg.iconPosition.y)
+      end
+    end
+  end
+
   -- CRITICAL FIX: Check preview mode BEFORE refreshing
   if previewMode then
     -- In preview mode - maintain preview value

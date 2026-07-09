@@ -1530,6 +1530,215 @@ function ns.GetArcAurasOptionsTable()
     }
 
     -- ═══════════════════════════════════════════════════════════════
+    -- [FORK] ICON ANCHOR (issue #40)
+    -- ═══════════════════════════════════════════════════════════════
+    local function AnchorHidden()
+        return collapsedSections.trackedItems or HideIfNoSelection()
+            or GetSelectedCount() > 1 or not IsSpellOrItemSelected()
+    end
+    local function AnchorHiddenOrDisabled()
+        if AnchorHidden() then return true end
+        local cfg = selectedArcAura and ns.ArcAuras and ns.ArcAuras.GetAnchorConfig(selectedArcAura)
+        return not (cfg and cfg.anchorToTracker)
+    end
+    local function GetAnchorCfgOrNew()
+        if not selectedArcAura then return nil end
+        local existing = ns.ArcAuras and ns.ArcAuras.GetAnchorConfig(selectedArcAura)
+        if existing then return existing end
+        -- Materialise default on first write
+        local newCfg = {
+            anchorToTracker  = false,
+            anchorTargetKind = "",
+            anchorTargetKey  = "",
+            anchorSourcePoint = "CENTER",
+            anchorTargetPoint = "CENTER",
+            anchorOffsetX = 0,
+            anchorOffsetY = 0,
+        }
+        if ns.ArcAuras and ns.ArcAuras.SetAnchorConfig then
+            ns.ArcAuras.SetAnchorConfig(selectedArcAura, newCfg)
+        end
+        return newCfg
+    end
+
+    args.iconAnchorHeader = {
+        type = "description",
+        name = "\n|cffffd700Anchor to Icon:|r",
+        order = 130,
+        width = "full",
+        fontSize = "medium",
+        hidden = AnchorHidden,
+    }
+    args.iconAnchorEnable = {
+        type = "toggle",
+        name = "Anchor to another icon",
+        desc = "Attach this arc aura on top of another tracker icon. Position is controlled by the anchor; free dragging is suspended while active.",
+        order = 131,
+        width = "full",
+        get = function()
+            local cfg = selectedArcAura and ns.ArcAuras and ns.ArcAuras.GetAnchorConfig(selectedArcAura)
+            return cfg and cfg.anchorToTracker or false
+        end,
+        set = function(_, value)
+            local cfg = GetAnchorCfgOrNew()
+            if not cfg then return end
+            cfg.anchorToTracker = value
+            if not value and ns.TrackerAnchors and selectedArcAura then
+                ns.TrackerAnchors.UnregisterSource("arcAura", selectedArcAura)
+            end
+            if ns.ArcAuras and ns.ArcAuras.GetFrame and selectedArcAura then
+                local frame = ns.ArcAuras.GetFrame(selectedArcAura)
+                if frame then ns.ArcAuras.LoadFramePosition(selectedArcAura, frame) end
+            end
+            LibStub("AceConfigRegistry-3.0"):NotifyChange("ArcUI")
+        end,
+        hidden = AnchorHidden,
+    }
+    args.iconAnchorTarget = {
+        type = "select",
+        name = "Target icon",
+        desc = "Which icon to anchor on top of.",
+        values = function()
+            if not ns.TrackerAnchors or not ns.TrackerAnchors.BuildTargetValues then return {} end
+            local vals = ns.TrackerAnchors.BuildTargetValues("arcAura", selectedArcAura or "")
+            vals[""] = "— Select target —"
+            return vals
+        end,
+        sorting = function()
+            if not ns.TrackerAnchors or not ns.TrackerAnchors.BuildTargetValues then return {} end
+            local _, sorting = ns.TrackerAnchors.BuildTargetValues("arcAura", selectedArcAura or "")
+            table.insert(sorting, 1, "")
+            return sorting
+        end,
+        get = function()
+            local cfg = selectedArcAura and ns.ArcAuras and ns.ArcAuras.GetAnchorConfig(selectedArcAura)
+            if not cfg then return "" end
+            return ns.TrackerAnchors and ns.TrackerAnchors.EncodeTargetValue(
+                cfg.anchorTargetKind, cfg.anchorTargetKey) or ""
+        end,
+        set = function(_, value)
+            local cfg = GetAnchorCfgOrNew()
+            if not cfg then return end
+            local kind, key
+            if ns.TrackerAnchors and ns.TrackerAnchors.DecodeTargetValue then
+                kind, key = ns.TrackerAnchors.DecodeTargetValue(value)
+            end
+            -- Cycle check
+            if kind and kind ~= "" and ns.TrackerAnchors and selectedArcAura and
+               ns.TrackerAnchors.HasCycle("arcAura", selectedArcAura, kind, key) then
+                print("|cffFF6600[ArcUI]|r Anchor rejected: would create a cycle.")
+                return
+            end
+            cfg.anchorTargetKind = kind or ""
+            cfg.anchorTargetKey  = key  or ""
+            if ns.ArcAuras and ns.ArcAuras.GetFrame and selectedArcAura then
+                local frame = ns.ArcAuras.GetFrame(selectedArcAura)
+                if frame then ns.ArcAuras.LoadFramePosition(selectedArcAura, frame) end
+            end
+            LibStub("AceConfigRegistry-3.0"):NotifyChange("ArcUI")
+        end,
+        order = 132,
+        width = "full",
+        hidden = AnchorHiddenOrDisabled,
+    }
+    args.iconAnchorSourcePoint = {
+        type = "select",
+        name = "This icon point",
+        desc = "Which point of this icon touches the target",
+        values = function()
+            return ns.CDMGroupsAnchors and ns.CDMGroupsAnchors.ANCHOR_POINTS or {}
+        end,
+        sorting = function()
+            return ns.CDMGroupsAnchors and ns.CDMGroupsAnchors.ANCHOR_POINTS_SORTED or {}
+        end,
+        get = function()
+            local cfg = selectedArcAura and ns.ArcAuras and ns.ArcAuras.GetAnchorConfig(selectedArcAura)
+            return cfg and cfg.anchorSourcePoint or "CENTER"
+        end,
+        set = function(_, value)
+            local cfg = GetAnchorCfgOrNew()
+            if cfg then cfg.anchorSourcePoint = value end
+            if ns.ArcAuras and ns.ArcAuras.GetFrame and selectedArcAura then
+                local frame = ns.ArcAuras.GetFrame(selectedArcAura)
+                if frame then ns.ArcAuras.LoadFramePosition(selectedArcAura, frame) end
+            end
+            LibStub("AceConfigRegistry-3.0"):NotifyChange("ArcUI")
+        end,
+        order = 133,
+        width = 1.0,
+        hidden = AnchorHiddenOrDisabled,
+    }
+    args.iconAnchorTargetPoint = {
+        type = "select",
+        name = "Target icon point",
+        desc = "Which point of the target icon this icon attaches to",
+        values = function()
+            return ns.CDMGroupsAnchors and ns.CDMGroupsAnchors.ANCHOR_POINTS or {}
+        end,
+        sorting = function()
+            return ns.CDMGroupsAnchors and ns.CDMGroupsAnchors.ANCHOR_POINTS_SORTED or {}
+        end,
+        get = function()
+            local cfg = selectedArcAura and ns.ArcAuras and ns.ArcAuras.GetAnchorConfig(selectedArcAura)
+            return cfg and cfg.anchorTargetPoint or "CENTER"
+        end,
+        set = function(_, value)
+            local cfg = GetAnchorCfgOrNew()
+            if cfg then cfg.anchorTargetPoint = value end
+            if ns.ArcAuras and ns.ArcAuras.GetFrame and selectedArcAura then
+                local frame = ns.ArcAuras.GetFrame(selectedArcAura)
+                if frame then ns.ArcAuras.LoadFramePosition(selectedArcAura, frame) end
+            end
+            LibStub("AceConfigRegistry-3.0"):NotifyChange("ArcUI")
+        end,
+        order = 134,
+        width = 1.0,
+        hidden = AnchorHiddenOrDisabled,
+    }
+    args.iconAnchorOffsetX = {
+        type = "range",
+        name = "Offset X",
+        min = -200, max = 200, step = 1,
+        get = function()
+            local cfg = selectedArcAura and ns.ArcAuras and ns.ArcAuras.GetAnchorConfig(selectedArcAura)
+            return cfg and cfg.anchorOffsetX or 0
+        end,
+        set = function(_, value)
+            local cfg = GetAnchorCfgOrNew()
+            if cfg then cfg.anchorOffsetX = value end
+            if ns.ArcAuras and ns.ArcAuras.GetFrame and selectedArcAura then
+                local frame = ns.ArcAuras.GetFrame(selectedArcAura)
+                if frame then ns.ArcAuras.LoadFramePosition(selectedArcAura, frame) end
+            end
+            LibStub("AceConfigRegistry-3.0"):NotifyChange("ArcUI")
+        end,
+        order = 135,
+        width = 1.0,
+        hidden = AnchorHiddenOrDisabled,
+    }
+    args.iconAnchorOffsetY = {
+        type = "range",
+        name = "Offset Y",
+        min = -200, max = 200, step = 1,
+        get = function()
+            local cfg = selectedArcAura and ns.ArcAuras and ns.ArcAuras.GetAnchorConfig(selectedArcAura)
+            return cfg and cfg.anchorOffsetY or 0
+        end,
+        set = function(_, value)
+            local cfg = GetAnchorCfgOrNew()
+            if cfg then cfg.anchorOffsetY = value end
+            if ns.ArcAuras and ns.ArcAuras.GetFrame and selectedArcAura then
+                local frame = ns.ArcAuras.GetFrame(selectedArcAura)
+                if frame then ns.ArcAuras.LoadFramePosition(selectedArcAura, frame) end
+            end
+            LibStub("AceConfigRegistry-3.0"):NotifyChange("ArcUI")
+        end,
+        order = 136,
+        width = 1.0,
+        hidden = AnchorHiddenOrDisabled,
+    }
+
+    -- ═══════════════════════════════════════════════════════════════
     -- AUTO-TRACK EQUIPPED SLOTS
     -- ═══════════════════════════════════════════════════════════════
     args.autoTrackSlotsHeader = {

@@ -258,6 +258,8 @@ GetDB = function()
     if not db.trackedSpells then db.trackedSpells = {} end
     if not db.positions then db.positions = {} end
     if not db.globalSettings then db.globalSettings = {} end
+    -- [FORK] Tracker anchor configs (issue #40)
+    if not db.anchorConfigs then db.anchorConfigs = {} end
     if not db.autoTrackSlots then
         db.autoTrackSlots = { [13] = true, [14] = true }
     end
@@ -1350,6 +1352,24 @@ function ArcAuras.GetFrame(arcID)
     return ArcAuras.frames[arcID]
 end
 
+-- [FORK] Public DB accessor for tracker anchors (issue #40)
+function ArcAuras.GetDB()
+    return GetDB()
+end
+
+-- [FORK] Tracker anchor config accessors (issue #40)
+function ArcAuras.GetAnchorConfig(arcID)
+    local db = GetDB()
+    return db and db.anchorConfigs and db.anchorConfigs[arcID]
+end
+
+function ArcAuras.SetAnchorConfig(arcID, cfg)
+    local db = GetDB()
+    if not db then return end
+    if not db.anchorConfigs then db.anchorConfigs = {} end
+    db.anchorConfigs[arcID] = cfg
+end
+
 function ArcAuras.UpdateFrameIcon(frame, config)
     if not frame or not config then return end
     
@@ -1438,6 +1458,15 @@ function ArcAuras.SaveFramePosition(arcID, point, relPoint, x, y)
 end
 
 function ArcAuras.LoadFramePosition(arcID, frame)
+    -- [FORK] Tracker anchor: let TrackerAnchors handle position if configured (issue #40)
+    if ns.TrackerAnchors then
+        local anchorCfg = ArcAuras.GetAnchorConfig(arcID)
+        if anchorCfg and anchorCfg.anchorToTracker then
+            ns.TrackerAnchors.Apply(frame, anchorCfg)
+            ns.TrackerAnchors.RegisterSource("arcAura", arcID, frame, anchorCfg)
+            return
+        end
+    end
     -- If CDMGroups is managing this frame, don't override its position
     -- CDMGroups uses savedPositions to track what it controls
     if ns.CDMGroups and ns.CDMGroups.savedPositions and ns.CDMGroups.savedPositions[arcID] then
