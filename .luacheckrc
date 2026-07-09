@@ -217,7 +217,13 @@ globals = {
   "PixelUtil",
   "STANDARD_TEXT_FONT",
   "Settings",
+  "SearchBoxTemplate_OnTextChanged",
   "ToggleEditModeManager",
+  "UIDropDownMenu_AddButton",
+  "UIDropDownMenu_CreateInfo",
+  "UIDropDownMenu_Initialize",
+  "UIDropDownMenu_SetText",
+  "UIDropDownMenu_SetWidth",
 
   -- Cooldown frame
   "CooldownFrame_Set",
