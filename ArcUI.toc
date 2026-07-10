@@ -110,8 +110,6 @@ CDM_Module\CDM_Groups\ArcUI_CDMGroups_ImportRestore.lua
 
 # CDM Groups Anchoring (must load before CDMGroups)
 CDM_Module\CDM_Groups\ArcUI_CDMGroupsAnchors.lua
-# [FORK] Tracker-to-tracker icon anchoring (issue #40)
-CDM_Module\CDM_Groups\ArcUI_TrackerAnchors.lua
 CDM_Module\CDM_Groups\ArcUI_CDMGroups.lua
 CDM_Module\CDM_Groups\ArcUI_CDMGroups_DynamicLayout.lua
 
