@@ -201,9 +201,20 @@ ShowUnlessTrackerAnchorHidden = function(frame)
     return false
 end
 
+-- [FORK] Tracker anchor: recalculate anchor-hidden state before showing.
+local function LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
+    if not frame then return false end
+    ArcAuras.LoadFramePosition(arcID, frame)
+    return ShowUnlessTrackerAnchorHidden(frame)
+end
+
 -- [FORK] Tracker anchor: shared show path for Arc Aura submodules (issue #40).
 function ArcAuras.ShowUnlessTrackerAnchorHidden(frame)
     return ShowUnlessTrackerAnchorHidden(frame)
+end
+
+function ArcAuras.LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
+    return LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
 end
 
 -- Global bridge for GlowDebugger (debug only)
@@ -3140,8 +3151,7 @@ function ArcAuras.AddTrackedItem(config)
         
         local frame = ArcAuras.CreateFrame(arcID, db.trackedItems[arcID])
         if frame then
-            ArcAuras.LoadFramePosition(arcID, frame)
-            ShowUnlessTrackerAnchorHidden(frame)
+            LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
             ArcAuras.ApplyInitialStateVisuals(arcID, frame)
             
             -- For items with on-use spells, schedule a delayed stack refresh
@@ -3246,7 +3256,7 @@ function ArcAuras.RecreateItemFrame(arcID)
     local frame = ArcAuras.CreateFrame(arcID, config)
     if not frame then return end
     
-    ShowUnlessTrackerAnchorHidden(frame)
+    LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
     ArcAuras.ApplyInitialStateVisuals(arcID, frame)
     
     -- Force position restore after a tick (CDMGroups registration is async sometimes)
@@ -3715,7 +3725,7 @@ function ArcAuras.Enable()
                     -- Use HideTrinketSlotFrame for trinkets - properly hooks Show() to block re-showing
                     ArcAuras.HideTrinketSlotFrame(arcID)
                 else
-                    ShowUnlessTrackerAnchorHidden(frame)
+                    LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
                     -- Apply proper state visuals (respects saved alpha settings)
                     ArcAuras.ApplyInitialStateVisuals(arcID, frame)
                 end
@@ -3754,7 +3764,7 @@ function ArcAuras.Enable()
             if existingFrame then
                 -- Frame already exists (hidden by Disable) - re-show if appropriate
                 if shouldShow then
-                    existingFrame:Show()
+                    LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, existingFrame)
                     ArcAuras.ApplyInitialStateVisuals(arcID, existingFrame)
                     -- Re-initialize with cooldown engine so state tracking resumes
                     if ns.ArcAurasCooldown and ns.ArcAurasCooldown.InitializeSpellFrame then
@@ -3779,7 +3789,7 @@ function ArcAuras.Enable()
                 }
                 local frame = ArcAuras.CreateFrame(arcID, spellConfig)
                 if frame then
-                    ShowUnlessTrackerAnchorHidden(frame)
+                    LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
                     -- Let ArcAurasCooldown engine take over
                     if ns.ArcAurasCooldown and ns.ArcAurasCooldown.InitializeSpellFrame then
                         ns.ArcAurasCooldown.InitializeSpellFrame(arcID, frame, spellConfig)
@@ -4077,7 +4087,7 @@ function ArcAuras.SyncSpellFrames()
             }
             local frame = ArcAuras.CreateFrame(arcID, spellConfig)
             if frame then
-                ShowUnlessTrackerAnchorHidden(frame)
+                LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
                 if ns.ArcAurasCooldown and ns.ArcAurasCooldown.InitializeSpellFrame then
                     ns.ArcAurasCooldown.InitializeSpellFrame(arcID, frame, spellConfig)
                 end
@@ -4208,7 +4218,7 @@ function ArcAuras.RefreshVisibility()
                     HideOrPreview(frame)
                 end
             else
-                ShowUnlessTrackerAnchorHidden(frame)
+                LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
                 -- Item frames: use full UpdateArcItemFrame so 0-stack desaturation
                 -- is re-evaluated (ApplyInitialStateVisuals only checks _isOnCooldown
                 -- and would stamp "ready/saturated" onto a 0-stack item frame).
@@ -4247,7 +4257,7 @@ function ArcAuras.RefreshVisibility()
                     else
                         local frame = ArcAuras.CreateFrame(arcID, config)
                         if frame then
-                            ShowUnlessTrackerAnchorHidden(frame)
+                            LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
                             ArcAuras.ApplyInitialStateVisuals(arcID, frame)
                         end
                     end
@@ -4328,7 +4338,7 @@ function ArcAuras.RefreshAllFrames()
                 if shouldHide then
                     HideOrPreview(frame)
                 else
-                    ShowUnlessTrackerAnchorHidden(frame)
+                    LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
                     -- Apply proper state visuals (respects saved alpha settings)
                     ArcAuras.ApplyInitialStateVisuals(arcID, frame)
                 end
@@ -4358,7 +4368,7 @@ function ArcAuras.RefreshAllFrames()
                 }
                 local frame = ArcAuras.CreateFrame(arcID, spellConfig)
                 if frame then
-                    ShowUnlessTrackerAnchorHidden(frame)
+                    LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
                     if ns.ArcAurasCooldown and ns.ArcAurasCooldown.InitializeSpellFrame then
                         ns.ArcAurasCooldown.InitializeSpellFrame(arcID, frame, spellConfig)
                     end
@@ -4388,7 +4398,7 @@ function ArcAuras.ForceShowAllFrames()
     for arcID, frame in pairs(ArcAuras.frames) do
         if frame then
             -- Show the frame with proper state visuals (respects saved alpha settings)
-            ShowUnlessTrackerAnchorHidden(frame)
+            LoadPositionAndShowUnlessTrackerAnchorHidden(arcID, frame)
             ArcAuras.ApplyInitialStateVisuals(arcID, frame)
             showCount = showCount + 1
             
