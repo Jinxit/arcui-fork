@@ -299,6 +299,14 @@ ns.DB_DEFAULTS = {
           -- Frame strata settings
           barFrameStrata = "MEDIUM",
           barFrameLevel = 10,
+          -- [FORK] Tracker anchor (issue #40): attach icon to another icon tracker
+          anchorToTracker = false,
+          anchorTargetKind = "",    -- "buffBarIcon" | "arcAura" | "cdmIcon"
+          anchorTargetKey  = "",    -- bar index (string) | arcID | cooldownID (string)
+          anchorSourcePoint = "CENTER",
+          anchorTargetPoint = "CENTER",
+          anchorOffsetX = 0,
+          anchorOffsetY = 0,
         },
         behavior = {
           hideBuffIcon = false,

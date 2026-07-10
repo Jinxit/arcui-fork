@@ -1365,6 +1365,9 @@ function Anchors.IsPickerActive()
     return pickerFrame and pickerFrame:IsShown()
 end
 
+-- [FORK] Export SafeAnchor for use by ArcUI_TrackerAnchors (issue #40)
+ns.CDMGroupsAnchors.SafeAnchor = SafeAnchor
+
 -- ===================================================================
 -- END OF ArcUI_CDMGroupsAnchors.lua
 -- ===================================================================
