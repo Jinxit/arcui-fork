@@ -76,6 +76,7 @@ globals = {
   -- Unit queries
   "UnitGUID",
   "UnitName",
+  "UnitNameFromGUID",
   "UnitClass",
   "UnitHealth",
   "UnitHealthMax",
@@ -92,6 +93,7 @@ globals = {
   "UnitIsPlayer",
   "UnitIsEnemy",
   "UnitCanAttack",
+  "UnitCanAssist",
   "UnitInParty",
   "UnitInRaid",
   "UnitInVehicle",
@@ -104,6 +106,8 @@ globals = {
   "UnitPowerBarID",
   "UnitPowerPercent",
   "UnitStagger",
+  "GetRaidTargetIndex",
+  "SetRaidTargetIconTexture",
 
   -- Spell / cooldown API
   "GetSpellInfo",
@@ -136,7 +140,10 @@ globals = {
   "GetUnitEmpowerStageDuration",
   "HasAction",
   "UnitCastingInfo",
+  "UnitCastingDuration",
   "UnitChannelInfo",
+  "UnitChannelDuration",
+  "UnitEmpoweredChannelDuration",
 
   -- Talent / trait API
   "GetSpecialization",
@@ -301,6 +308,7 @@ globals = {
   "C_AddOns",
   "C_CombatAudioAlert",
   "C_CreatureInfo",
+  "C_CVar",
   "C_EncodingUtil",
   "C_RestrictedActions",
   "C_TTSSettings",
