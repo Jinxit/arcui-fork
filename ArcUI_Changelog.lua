@@ -29,6 +29,30 @@ local C_DESC  = "ffb0b0b0"  -- entry description
 -- ===================================================================
 CL.versions = {
   {
+    version = "3.7.7",
+    sections = {
+      {
+        header = "New Features", color = C_NEW, items = {
+          { title = "Patch 12.1 (Midnight) Support", desc = "ArcUI now runs on the 12.1 Midnight PTR. The new patch changes how buffs and debuffs can be read, which used to break large parts of the addon. ArcUI now detects the new restrictions and adapts, so your bars, cooldown icons, and aura tracking keep working. The few options the new rules make impossible are disabled on 12.1 and clearly marked in the panel (they still work normally on live). This is a work in progress and may have rough edges, but the addon is now usable on 12.1 instead of breaking." },
+          { title = "Focus Castbar", desc = "A castbar showing what your focus target is casting, with spell name, timer, and icon. Color it differently for spells you can't interrupt or hide those entirely, show a marker the moment your interrupt comes off cooldown, keep the bar on screen briefly after a cast (colored for success, fail, or interrupt), and add a glow for important casts. Off by default, under Castbar > Focus Castbar. Contributed by Seraidi." },
+          { title = "Dim or Hide a Cooldown Icon While Its Aura Is Active", desc = "A per-icon option to fade or fully hide a cooldown icon while the buff it tracks is up, so an icon that is already in use gets out of the way. Off by default." },
+        },
+      },
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "Collapsible Option Sections", desc = "The Cooldown Reminder appearance and audio panel and the Custom Auras and Cooldowns lists now use collapsible headers so long panels are easier to scan." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Cooldown Reminder: No False Alert on Windup Items", desc = "Items with a short effect window before their real cooldown (like the Algari Puzzle Box) no longer announce \"ready\" the instant the effect ends." },
+          { title = "Cooldown Reminder: Reminders Work Immediately When Set Mid-Cooldown", desc = "A reminder created or edited while the spell or item is already on cooldown now starts tracking right away." },
+          { title = "Instance and Mythic+ Stability", desc = "Totem cooldown bars and secondary-resource bars (such as Soul Fragments and Maelstrom Weapon) no longer risk errors inside dungeons and raids." },
+        },
+      },
+    },
+  },
+  {
     version = "3.7.6",
     sections = {
       {

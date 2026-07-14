@@ -8177,8 +8177,15 @@ local function IsAuraActive(cooldownID, auraType)
   
   if auraType == "totem" then
     -- Totem/pet/ground: check preferredTotemUpdateSlot
-    local slot = cdmFrame.preferredTotemUpdateSlot or (cdmFrame.totemData and cdmFrame.totemData.slot)
-    if slot and type(slot) == "number" and slot > 0 then
+    -- totemData is a SECRET table in instances; only index it when non-secret (open world).
+    local slot = cdmFrame.preferredTotemUpdateSlot
+    if not slot then
+      local td = cdmFrame.totemData
+      if td and not issecretvalue(td) then slot = td.slot end
+    end
+    -- A secret slot can't be compared (slot > 0 would throw); treat it as valid and let the
+    -- GetTotemInfo / issecretvalue path below decide.
+    if slot and (issecretvalue(slot) or (type(slot) == "number" and slot > 0)) then
       local haveTotem = GetTotemInfo(slot)
       -- Secret value or truthy = totem exists
       if issecretvalue and issecretvalue(haveTotem) then
@@ -8606,6 +8613,10 @@ timerEventFrame:SetScript("OnEvent", function(self, event, ...)
   elseif event == "UNIT_AURA" then
     local unit, updateInfo = ...
     if unit ~= "player" or not updateInfo then return end
+    -- 12.1: UNIT_AURA payload is fully secret in restricted content -- the id vectors are
+    -- secret tables, so #/ipairs on them throw. Bail; Stack Changed triggers won't fire
+    -- under secrecy. Inert on live (issecretvalue false -> normal path).
+    if issecretvalue and issecretvalue(updateInfo.isFullUpdate) then return end
 
     -- ── STACK CHANGED TRIGGER ─────────────────────────────────────────
     -- updatedAuraInstanceIDs = stack gained/lost mid-aura

@@ -852,6 +852,132 @@ ns.DB_DEFAULTS.global.castbarShareLocation = false  -- when sharing, keep the ba
 ns.DB_DEFAULTS.global.castbarSharedInit    = false
 ns.DB_DEFAULTS.global.castbars             = { ["*"] = CopyTable(ns.DB_DEFAULTS.char.castbars["*"]) }
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ADVANCED DEBUFFS / EXTERNALS (standalone draggable icon trackers, default off)
+-- Per-character (ns.db.char). Ported from contributor PR; UI placement: Debuffs
+-- under the Buffs/Debuffs section, Externals top-level for now.
+-- ═══════════════════════════════════════════════════════════════════════════
+ns.DB_DEFAULTS.char.advancedDebuffs = {
+  enabled = false,
+  iconSize = 40,
+  iconSpacing = 4,
+  iconsPerRow = 8,
+  maxRows = 2,
+  showSwipe = true,
+  reverseSwipe = true,
+  showTooltips = true,
+  growHorizontal = "RIGHT",
+  growVertical = "DOWN",
+  borderColorMode = "dispel",
+  borderColor = { r = 0.8, g = 0.8, b = 0.8, a = 1 },
+  borderWidth = 2,
+  borderGlow = false,
+  glowWidth = 2,
+  strata = "MEDIUM",
+  position = { point = "CENTER", relativePoint = "CENTER", x = 0, y = -200, relativeFrame = "UIParent" },
+  filters = {
+    PLAYER = false,
+    RAID = false,
+    CROWD_CONTROL = false,
+    RAID_IN_COMBAT = false,
+    RAID_PLAYER_DISPELLABLE = false,
+    IMPORTANT = false,
+  },
+  hideDebuffs = { bloodlust = false, timeWarp = false, drums = false, timeTrial = false },
+}
+ns.DB_DEFAULTS.char.advancedExternals = {
+  enabled = false,
+  iconSize = 40,
+  iconSpacing = 4,
+  iconsPerRow = 8,
+  maxRows = 1,
+  showSwipe = true,
+  reverseSwipe = true,
+  showTooltips = true,
+  growHorizontal = "RIGHT",
+  growVertical = "DOWN",
+  borderColor = { r = 0.2, g = 0.8, b = 0.2, a = 1 },
+  borderWidth = 2,
+  borderGlow = false,
+  glowWidth = 2,
+  strata = "MEDIUM",
+  position = { point = "CENTER", relativePoint = "CENTER", x = 0, y = -260, relativeFrame = "UIParent" },
+  showBigDefensives = false,
+}
+
+-- ===================================================================
+-- FOCUS CASTBAR (tracks the focus target's casts)
+-- ===================================================================
+ns.DB_DEFAULTS.char.focusCastbar = {
+  enabled             = false,
+  width               = 220,
+  height              = 18,
+  barPosition         = { point = "CENTER", relPoint = "CENTER", x = 0, y = -120 },
+  barAnchorPoint      = "CENTER",
+  anchorToFrame       = false,
+  anchorFrameName     = "",
+  anchorPoint         = "CENTER",
+  anchorRelativePoint = "CENTER",
+  anchorOffsetX       = 0,
+  anchorOffsetY       = 0,
+  barFrameStrata      = "MEDIUM",
+  barColor            = { r = 1, g = 0.65, b = 0, a = 1 },
+  showBackground      = true,
+  backgroundColor     = { r = 0.1, g = 0.1, b = 0.1, a = 0.9 },
+  showBorder          = true,
+  borderColor         = { r = 0, g = 0, b = 0, a = 1 },
+  drawnBorderThickness = 2,
+  -- Glow outline defaults ON for a fresh focus castbar (matches the dev's intent);
+  -- the castbar itself is still opt-in via focusCastbar.enabled = false.
+  showGlow            = true,
+  glowType            = "pixel",
+  glowColor           = { r = 1, g = 0.65, b = 0, a = 1 },
+  glowWidth           = 2,
+  glowLines           = 8,
+  glowFrequency       = 0.25,
+  showSpellName       = true,
+  spellNameMaxWidth   = 0,
+  showTimer           = true,
+  showCasterName      = true,
+  casterNameColor     = { r = 1, g = 0.82, b = 0, a = 1 },
+  casterNameOffsetX   = 0,
+  casterNameOffsetY   = 0,
+  casterNameAnchor    = "RIGHT",
+  showFocusTarget     = false,
+  focusTargetColor    = { r = 0.6, g = 0.8, b = 1, a = 1 },
+  focusTargetOffsetX  = 0,
+  focusTargetOffsetY  = 0,
+  focusTargetAnchor   = "RIGHT",
+  showRaidMarker      = true,
+  raidMarkerSize      = 32,
+  raidMarkerAnchor    = "LEFT",
+  raidMarkerOffsetX   = -36,
+  raidMarkerOffsetY   = 0,
+  font                = "Friz Quadrata TT",
+  fontSize            = 11,
+  textOutline         = "THICKOUTLINE",
+  textColor           = { r = 1, g = 1, b = 1, a = 1 },
+  texture             = "Blizzard",
+  uninterruptibleEnabled = false,
+  uninterruptibleColor   = { r = 0.5, g = 0.5, b = 0.5, a = 1 },
+  raidMarkerDefault    = 8,      -- index shown in preview (moon=8); 0 = off
+  hideNotInterruptible = false,
+  importantGlowEnabled   = false,
+  importantGlowType      = "pixel",
+  importantGlowColor     = { r = 1, g = 0.2, b = 0.2, a = 1 },
+  importantGlowLines     = 8,
+  importantGlowFrequency = 0.25,
+  importantGlowThickness = 2,
+  kickEnabled       = false,
+  kickNotReadyColor = { r = 0.55, g = 0.55, b = 0.55, a = 1 },
+  kickTickColor     = { r = 1, g = 1, b = 1, a = 1 },
+  holdEnabled          = false,
+  holdDuration         = 0.8,
+  holdSuccessColor     = { r = 0.2, g = 1.0, b = 0.2, a = 1 },
+  holdFailColor        = { r = 1.0, g = 0.5, b = 0.0, a = 1 },
+  holdInterruptedColor = { r = 0.2, g = 0.4, b = 1.0, a = 1 },
+}
+
 -- ===================================================================
 -- HELPER: Get Bar Config (Buff/Debuff bars)
 -- ===================================================================
