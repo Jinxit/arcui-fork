@@ -4618,7 +4618,7 @@ local function UpdateBarForGroup(barNumber, cfg, barFrame, groupName)
       isVertical,
       cfg.matchWidthAdjust or 0, cfg.matchWidthAdjustPct or 0,
       isVertical, -- needsSwap: vertical bars swap SetSize arguments
-      false) -- tracking bars have no matchIconEdges
+      cfg.matchIconEdges) -- [FORK] pass matchIconEdges through (upstream 3.7.8 feature)
   -- [FORK] end
 end
 

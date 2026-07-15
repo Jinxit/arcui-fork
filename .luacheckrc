@@ -330,6 +330,7 @@ globals = {
   "IsInInstance",
   "IsInGroup",
   "IsInRaid",
+  "IsEncounterInProgress",
   "GetNumGroupMembers",
   "InCombatLockdown",
   "IsMounted",
