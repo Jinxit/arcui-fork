@@ -109,6 +109,9 @@ local function CopyLayoutData(src)
         alignment            = src.alignment,
         horizontalGrowth     = src.horizontalGrowth,
         verticalGrowth       = src.verticalGrowth,
+        -- Group type
+        groupType            = src.groupType,
+        auraLayout           = src.auraLayout and DeepCopy(src.auraLayout) or nil,
         -- Appearance
         showBorder           = src.showBorder,
         showBackground       = src.showBackground,
@@ -2365,6 +2368,9 @@ function IE.SaveGroupTemplate(name, description, silent)
                 alignment = group.layout.alignment,
                 horizontalGrowth = group.layout.horizontalGrowth,
                 verticalGrowth = group.layout.verticalGrowth,
+                -- Group type
+                groupType = group.groupType,
+                auraLayout = group.auraLayout and DeepCopy(group.auraLayout) or nil,
                 -- Appearance
                 showBorder = group.showBorder,
                 showBackground = group.showBackground,
@@ -2912,8 +2918,6 @@ function IE.EnsureDefaultTemplate()
         createdAt = time(),
         groups = DEFAULT_GROUPS,
     }
-    
-    print("|cff00ccffArcUI|r: Created default Group Template")
 end
 
 -- Save another spec's layout as a Group Template
@@ -3005,6 +3009,9 @@ function IE.SaveSpecAsTemplate(layoutKey, templateName)
             alignment = layout.alignment,
             horizontalGrowth = layout.horizontalGrowth,
             verticalGrowth = layout.verticalGrowth,
+            -- Group type
+            groupType = group.groupType,
+            auraLayout = group.auraLayout and DeepCopy(group.auraLayout) or nil,
             -- Appearance
             showBorder = group.showBorder,
             showBackground = group.showBackground,
