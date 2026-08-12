@@ -1,3 +1,16 @@
+## 3.7.10.b
+
+### Bug Fixes
+
+- **Aura icon countdown colors work again** — The countdown text on tracked buff and debuff icons changes color at your thresholds again, everywhere including raids and Mythic+.
+- **No more floating empty border after a combat reload** — A square border with nothing inside could appear at the Cooldown Manager's default position after reloading mid-fight. Icon borders now only draw around icons that actually have art.
+
+## 3.7.10.a
+
+### Improvements
+
+- **Loads on 12.0.x again** — For players whose game client has not updated to Midnight 12.1 yet, ArcUI no longer shows as incompatible. The new 12.1 features stay dormant until your client is on 12.1, and the What's New window waits for it too.
+
 ## 3.7.10
 
 ### New Features
