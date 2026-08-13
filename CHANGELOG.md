@@ -1,3 +1,71 @@
+## 3.7.11
+
+### New Features
+
+- **Use Texture Colors** — A new toggle on aura, stack, duration, cooldown, charge, and resource bars plus both castbars: show your fill texture's own colors (gradients, rainbows, artwork) instead of tinting it with the bar color. Color controls that no longer apply gray out and say why.
+- **One voice for the whole addon** — Everything that speaks (Cooldown Reminder, CDM aura alerts, Arc icon alerts) now shares one Voice and Speech Rate setting and respects your Text-to-Speech volume. New speech controls include a Test Voice button, the "sound between messages" tick toggle, and a shortcut to WoW's own speech options.
+- **Ignore Spell Overrides for Arc spell icons** — A new per-icon toggle that keeps an Arc spell icon on its base spell's cooldown, artwork, and glows even while the spell is temporarily overridden.
+
+### Improvements
+
+- **Auto-Track Trinket Slots got their own section** — The trinket auto-track controls moved out of the filter dropdown into a collapsible section right under Global Options, and an auto-tracked icon's Enabled toggle now drives the slot setting itself, so turning one off finally sticks across reloads.
+- **Proper alert sound pickers** — CDM aura alert dropdowns now show sound names with a preview button instead of raw file paths, and sound and speech can be set independently for every alert.
+- **Icons stay honest through spec changes** — An icon could keep an "aura active" look or a stuck ready glow after changing specs; ArcUI now re-checks every icon once the Cooldown Manager finishes shuffling and clears anything stale automatically.
+
+### Bug Fixes
+
+- **CDM aura alerts fire again** — The alert feature was silently broken, and it now also covers icons the Cooldown Manager creates mid-session in dungeons.
+- **Potions and healthstones get cooldown visuals** — Bag-item icons in the Cooldown Manager never dimmed or dropped their ready glow. Item icons' ready glow also no longer stays on through the whole cooldown, and Ignore Aura Override now works on them.
+- **Custom Icon field works again** — Entering a spell, item, or icon ID in the Custom Icon box threw an error on every keystroke.
+- **Custom icons stop flickering in combat** — A custom icon could snap back to the original artwork and flip between the two mid-fight, especially in dungeons.
+- **Stack bars show their countdown in combat** — A stack bar's duration text went blank the moment combat started.
+- **Settings apply without a reload** — Changing countdown color thresholds, visiting the options panel, or flipping a bar between Stacks and Duration mode could silently kill a bar or texture countdown until a reload, especially after a fight.
+- **Textures added by spell ID count down** — Their duration text and drain never attached at all.
+- **Hiding an icon keeps its texts** — With Show Icon off, the stack count and countdown vanished along with the icon art instead of floating on their own.
+
+## 3.7.10.d
+
+### Improvements
+
+- **Hide When Inactive in the Catalog** — The Hide When Inactive toggle is now available directly on each bar's row in the Aura Catalog next to Hide CDM Icon/Bar, so you no longer need to dig into the Appearance tab for it.
+
+### Bug Fixes
+
+- **Stack text settings now survive reloads** — Show at 1 Stack and stack color bands on aura icons and CDM icons no longer silently stop working after a reload or login.
+- **Double stack numbers in dungeons** — Fixed CDM icons sometimes showing two overlapping stack counts inside dungeons.
+- **Stuck stack count on target swap** — Fixed CDM icons sometimes keeping the previous target's stack count after switching targets.
+- **Stack display vanishing mid-dungeon** — Fixed the CDM icon stack display disappearing for the rest of a dungeon after the Cooldown Manager rebuilt its icons; it now follows the icon through rebuilds, even in combat.
+- **Buff on Pet bar empty after reload** — Fixed Buff on Pet bars (e.g. Dark Transformation) showing an empty fill after a reload.
+- **Tooltip errors on scenario widgets** — Fixed errors when hovering scenario/affix spell displays with Spell IDs in Tooltips enabled.
+
+## 3.7.10.c
+
+### New Features
+
+- **Track buffs on your pet** — A new "Buff on Pet" type for duration bars and a "Buff (pet)" mode for aura icons, for buffs your pet carries (like Dark Transformation) that normal tracking can't see.
+- **Stack colors and Show at 1 Stack are back on 12.1** — Color the stack number by stack count and show it even at a single stack, on both aura icons and Cooldown Manager buff icons — working everywhere including raids and Mythic+. Changes apply instantly, and the color band controls got a cleaner layout.
+
+### Bug Fixes
+
+- **Icons stay colored while their buff is active** — A cooldown icon could stay grayed out through the whole buff after the last update.
+- **No more duplicate icons after importing a profile** — Importing could leave an unclickable copy of an icon in your row, and sometimes an empty floating square.
+- **Aura glow timing options tell the truth on 12.1** — The % and seconds glow thresholds cannot work on 12.1 (an aura's remaining time is protected), so those modes are removed there and saved thresholds behave as Always. CDM Pandemic Timing still works exactly.
+- **CDM Timer Mirror options say what applies** — Fill mode, smoothing and conditional color cannot affect mirrored bars; they are now disabled with an explanation instead of silently doing nothing.
+- **Panels look right alongside other addons** — With many addons installed, another addon's copy of a shared library could flatten ArcUI's side-by-side option layouts.
+
+## 3.7.10.b
+
+### Bug Fixes
+
+- **Aura icon countdown colors work again** — The countdown text on tracked buff and debuff icons changes color at your thresholds again, everywhere including raids and Mythic+.
+- **No more floating empty border after a combat reload** — A square border with nothing inside could appear at the Cooldown Manager's default position after reloading mid-fight. Icon borders now only draw around icons that actually have art.
+
+## 3.7.10.a
+
+### Improvements
+
+- **Loads on 12.0.x again** — For players whose game client has not updated to Midnight 12.1 yet, ArcUI no longer shows as incompatible. The new 12.1 features stay dormant until your client is on 12.1, and the What's New window waits for it too.
+
 ## 3.7.10
 
 ### New Features
