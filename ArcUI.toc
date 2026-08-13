@@ -2,7 +2,7 @@
 ## Title: Arc UI
 ## Notes: Buff/Debuff stack tracking bars, icons, resource bars, cooldown bars, and timer bars with CD Manager integration
 ## Author: Arc
-## Version: 3.7.10
+## Version: 3.7.11
 ## X-Wago-ID:mNw7Q2No
 ## X-Curse-Project-ID: 1391614
 ## SavedVariables: ArcUIDB, ArcUI_CDMEnhance_Debug
@@ -161,8 +161,8 @@ CDM_Module\CDM_Enhance\ArcUI_CDMEnhanceOptions.lua
 CDM_Module\CDM_Enhance\ArcUI_CustomLabelOptions.lua
 CDM_Module\CDM_Enhance\ArcUI_SpellUsabilityOptions.lua
 
-# Fork bar styling - mask textures and texture borders
+# [FORK] Fork bar styling - mask textures and texture borders
 ArcUI_ForkStyling.lua
 
-# Fork wowless CI test assertions (no-op in the live game; guards on _G.WowlessData)
+# [FORK] Fork wowless CI test assertions (no-op in the live game; guards on _G.WowlessData)
 tools/wowless-ci/ArcUI_ForkTest.lua

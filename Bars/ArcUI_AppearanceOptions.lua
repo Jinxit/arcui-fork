@@ -446,6 +446,16 @@ IsIconMode = function()
   return cfg and cfg.display and cfg.display.displayType == "icon"
 end
 
+-- Selected bar is driven by the CDM Timer Mirror (12.1 lane). The mirror
+-- re-pushes the CD Manager bar item's OWN secret timer values into our bar,
+-- so options that would need to COMPUTE on those values (fill direction,
+-- smoothing interpolation, conditional color layers) cannot apply.
+local function IsMirrorBar()
+  if not (ns.API and ns.API.IS_121) then return false end
+  local cfg = GetSelectedConfig()
+  return (cfg and cfg.tracking and cfg.tracking.cdmMirror) and true or false
+end
+
 -- Check if current bar is in bar display mode (or no selection)
 IsBarMode = function()
   local cfg = GetSelectedConfig()
@@ -3340,10 +3350,21 @@ function ns.AppearanceOptions.GetOptionsTable()
           return not cfg or (cfg.display.thresholdMode ~= "perStack" and cfg.display.thresholdMode ~= "granular")
         end
       },
+      barFillModeMirrorNote = {
+        type = "description", fontSize = "small",
+        name = "|cffff8800This bar uses CDM Timer Mirror: it repeats the Cooldown Manager's own timer, which always drains. Fill mode, Smoothing and Conditional Color can't apply to a mirrored timer.|r",
+        order = 21.45, width = "full",
+        hidden = function()
+          if GetSelectedConfig() == nil or IsIconMode() or collapsedSections.fill then return true end
+          if not IsDurationBar() then return true end
+          return not IsMirrorBar()
+        end
+      },
       barFillMode = {
         type = "select",
         name = "Fill Mode",
-        desc = "Drain: bar shrinks as time passes. Fill: bar grows as time passes.",
+        desc = "Drain: bar shrinks as time passes. Fill: bar grows as time passes.\n\n|cffff8800Not available while CDM Timer Mirror is on: the mirror repeats the Cooldown Manager's own timer, which always drains.|r",
+        disabled = IsMirrorBar,
         values = GetFillModes,
         get = function()
           local cfg = GetSelectedConfig()
@@ -3418,7 +3439,8 @@ function ns.AppearanceOptions.GetOptionsTable()
       enableSmoothing = {
         type = "toggle",
         name = "Smooth Fill",
-        desc = "Smoothly animate bar fill changes.\n\n|cff00ff00Duration bars:|r Applies to Manual Max mode. Auto mode always uses smooth interpolation via SetTimerDuration.",
+        desc = "Smoothly animate bar fill changes.\n\n|cff00ff00Duration bars:|r Applies to Manual Max mode. Auto mode always uses smooth interpolation via SetTimerDuration.\n\n|cffff8800Not available while CDM Timer Mirror is on: the mirror repeats the Cooldown Manager's raw timer pushes as-is.|r",
+        disabled = IsMirrorBar,
         get = function()
           local cfg = GetSelectedConfig()
           return cfg and cfg.display.enableSmoothing
@@ -3442,7 +3464,17 @@ function ns.AppearanceOptions.GetOptionsTable()
       useGradient = {
         type = "toggle",
         name = "Gradient",
-        desc = "Apply a gradient effect to bar fill (darker/lighter edges).\n\n|cffff9900Note:|r Gradient is disabled when Conditional Color thresholds are active (WoW API limitation).",
+        desc = function()
+          local cfg = GetSelectedConfig()
+          if cfg and cfg.display and cfg.display.useTextureColor then
+            return "|cffff9900Ignored while 'Use Texture Colors' is on|r - a gradient would tint the texture."
+          end
+          return "Apply a gradient effect to bar fill (darker/lighter edges).\n\n|cffff9900Note:|r Gradient is disabled when Conditional Color thresholds are active (WoW API limitation)."
+        end,
+        disabled = function()
+          local cfg = GetSelectedConfig()
+          return cfg and cfg.display and cfg.display.useTextureColor == true
+        end,
         get = function()
           local cfg = GetSelectedConfig()
           return cfg and cfg.display.useGradient
@@ -4089,10 +4121,18 @@ function ns.AppearanceOptions.GetOptionsTable()
           return "Base Bar Color"
         end,
         desc = function()
+          local cfg = GetSelectedConfig()
+          if cfg and cfg.display and cfg.display.useTextureColor then
+            return "|cffff9900Ignored while 'Use Texture Colors' is on|r - the fill renders the texture's own colors."
+          end
           if IsChargeBar() then
             return "Color of the charge bars (both recharging and full unless 'Different Full Color' is enabled)"
           end
           return "Primary bar color"
+        end,
+        disabled = function()
+          local cfg = GetSelectedConfig()
+          return cfg and cfg.display and cfg.display.useTextureColor == true
         end,
         hasAlpha = true,
         get = function()
@@ -4183,9 +4223,38 @@ function ns.AppearanceOptions.GetOptionsTable()
           return false
         end
       },
-      
-      
-      
+
+      -- USE TEXTURE COLORS: stop tinting the fill so a colored texture renders
+      -- as authored. ArcUI's color writes become white (the identity tint), so
+      -- base color, gradient and threshold recoloring all step aside.
+      useTextureColor = {
+        type = "toggle",
+        name = "Use Texture Colors",
+        desc = "Show the fill texture's own colors instead of coloring it.\n\n"
+          .. "Turn this ON for textures that are already colored (rainbows, gradients, artwork) so ArcUI leaves them exactly as they are.\n\n"
+          .. "|cffff9900While this is on, Base Bar Color, Gradient and any threshold/conditional fill colors are ignored.|r",
+        get = function()
+          local cfg = GetSelectedConfig()
+          return cfg and cfg.display and cfg.display.useTextureColor == true
+        end,
+        set = function(info, value)
+          local cfg = GetSelectedConfig()
+          if cfg then
+            -- nil instead of false keeps SavedVariables clean (DataRepair strips defaults)
+            cfg.display.useTextureColor = value or nil
+            RefreshBar()
+          end
+        end,
+        order = 30.205,
+        width = 1.2,
+        hidden = function()
+          if GetSelectedConfig() == nil or IsIconMode() or collapsedSections.colorOptions then return true end
+          -- segmented / fragmented / icon modes drive their own per-part colors
+          if IsNonContinuousMode() then return true end
+          return false
+        end,
+      },
+
       -- Per-Slot Colors toggle (Charge bars only - right of barColor)
       usePerSlotColors = {
         type = "toggle",
@@ -6490,7 +6559,8 @@ function ns.AppearanceOptions.GetOptionsTable()
       durationColorCurveEnabled = {
         type = "toggle",
         name = "Conditional Color",
-        desc = "Change bar color based on remaining time. 100% uses Base Bar Color.\n\n|cffff9900Note:|r Enabling this disables gradient effect (WoW API limitation).",
+        desc = "Change bar color based on remaining time. 100% uses Base Bar Color.\n\n|cffff9900Note:|r Enabling this disables gradient effect (WoW API limitation).\n\n|cffff8800Not available while CDM Timer Mirror is on: conditional colors are drawn by the aura engine, which mirror bars bypass (the mirror repeats the Cooldown Manager's own timer instead).|r",
+        disabled = IsMirrorBar,
         get = function()
           local cfg = GetSelectedConfig()
           return cfg and cfg.display.durationColorCurveEnabled
@@ -6524,6 +6594,20 @@ function ns.AppearanceOptions.GetOptionsTable()
           if not (ns.API and ns.API.IS_121) then return true end
           local cfg = GetSelectedConfig()
           return not (cfg and cfg.display.durationColorCurveEnabled and cfg.display.durationThresholdAsSeconds)
+        end
+      },
+      durationColorCurveMirrorNote = {
+        type = "description",
+        name = "|cffff8800This bar uses CDM Timer Mirror, so the settings below have no effect: the mirror repeats the Cooldown Manager's own timer and bypasses the aura engine that draws conditional colors.|r",
+        fontSize = "small",
+        order = 33.722, width = "full",
+        hidden = function()
+          if not IsDurationBar() then return true end
+          if IsIconMode() then return true end
+          if collapsedSections.colorOptions then return true end
+          if not IsMirrorBar() then return true end
+          local cfg = GetSelectedConfig()
+          return not (cfg and cfg.display.durationColorCurveEnabled)
         end
       },
 

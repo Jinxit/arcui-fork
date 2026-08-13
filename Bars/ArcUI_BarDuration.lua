@@ -105,8 +105,11 @@ BD.logBuf = {}                      -- exposed so the (unshipped) debug tool can
 local logBuf, LOG_MAX = BD.logBuf, 300
 local logWin, logEdit
 local function Log(fmt, ...)
-  if not BD.debug then return end
+  local tap = ns.TraceTap
+  if not BD.debug and not tap then return end
   local msg = (select("#", ...) > 0) and fmt:format(...) or fmt
+  if tap then tap("BD", msg) end
+  if not BD.debug then return end
   logBuf[#logBuf + 1] = date("%H:%M:%S ") .. msg
   if #logBuf > LOG_MAX then table.remove(logBuf, 1) end
   -- NEVER to chat by default: this logs on every refresh of every bar, which
@@ -1167,8 +1170,13 @@ function BD.Attach(barFrame, fs, cooldownID, trackedSpellID, unit, opts)
     Log("Attach: container(%s) not ready -> pending (cd=%s)", unit, tostring(cooldownID))
     return
   end
-  local assist = (unit == "player") or (UnitCanAssist and UnitCanAssist("player", unit))
-  local filter = assist and "HELPFUL" or "HARMFUL"
+  -- Filter by LANE SEMANTICS, never live unit state: UnitCanAssist("player",
+  -- "pet") is FALSE while the pet does not exist — which is exactly the case
+  -- during the login prebuild — so the pet slot got baked with a HARMFUL
+  -- filter for the whole session and the pet's buff could never match (the
+  -- "empty pet bar after every reload" bug). The lanes are fixed by design:
+  -- target = debuffs (HARMFUL); player/pet = buffs (HELPFUL).
+  local filter = (unit == "target") and "HARMFUL" or "HELPFUL"
   -- threshold overlays present -> colour/texture split: the base goes FLAT
   -- too (the shade slot below carries the texture for every layer at once)
   local nSteps = opts.applicationSteps and #opts.applicationSteps or 0
@@ -1405,6 +1413,23 @@ function BD.Detach(barFrame)
       if sub.container.UpdateAllAuras then sub.container:UpdateAllAuras() end
     end
   end
+  -- RETIRE the owner's containers outright (hide + evict) so the NEXT Attach
+  -- builds FRESH ones. THE AURA-ICONS LAW, now enforced here too: a container
+  -- that has lived through combat carries forbidden aspects from displaying
+  -- secret data, and a later AddAuraSlot into it dies inside Blizzard's frame
+  -- provider ("child would inherit forbidden aspects"). Re-slotting the
+  -- cached container is why EVERY post-combat rewire — threshold band edits
+  -- (ApplyStyle's recreate), the options panel's texture detach/re-attach —
+  -- left the binding dead until a reload. One container, ONE AddAuraSlot,
+  -- ever. Hiding retires it (buttons are its children); the leaked invisible
+  -- 1x1 frame per rewire is the same accepted cost as the aura icons module.
+  local perOwner = containers[barFrame]
+  if perOwner then
+    for _, c in pairs(perOwner) do
+      if c.Hide then c:Hide() end
+    end
+    containers[barFrame] = nil
+  end
 end
 
 function BD.DetachAll()
@@ -1438,6 +1463,8 @@ function BD.ApplyStyle(barFrame, durationFrame, showDuration, decimals, duration
   end
   if blocked then
     styleDeferred[barFrame] = { durationFrame, showDuration, decimals, durationColor, baseColor, fillDirection, durFormatter, textColorEnabled, colorKey }
+    Log("ApplyStyle: BLOCKED (buttons forbidden) -> deferred (cd=%s key %s->%s)",
+      tostring(a.cooldownID), tostring(a.colorKey), tostring(colorKey))
     return
   end
   styleDeferred[barFrame] = nil
@@ -1459,6 +1486,9 @@ function BD.ApplyStyle(barFrame, durationFrame, showDuration, decimals, duration
   -- therefore served by RECREATING the slot: a fresh AddAuraSlot wires the new
   -- formatter/direction inside its own init window (legal even in combat).
   if (formatterChanged or directionChanged) and a.req then
+    Log("ApplyStyle: RECREATE (cd=%s, fmtChanged=%s dirChanged=%s, key %s -> %s, dec %s -> %s)",
+      tostring(a.cooldownID), tostring(formatterChanged), tostring(directionChanged),
+      tostring(a.colorKey), tostring(colorKey), tostring(a.decimals), tostring(decimals))
     local req = a.req
     req.opts.durDecimals      = decimals
     req.opts.durFormatter     = durFormatter
@@ -1536,6 +1566,8 @@ function BD.ApplyStyle(barFrame, durationFrame, showDuration, decimals, duration
   a.decimals = decimals
   a.textColorEnabled = textColorEnabled
   a.colorKey = colorKey
+  Log("ApplyStyle: plain restyle done (cd=%s key=%s tce=%s)",
+    tostring(a.cooldownID), tostring(colorKey), tostring(textColorEnabled))
 end
 
 -- ── combat deferral + eager container creation + target-swap refresh ─────────
@@ -1544,14 +1576,19 @@ ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")   -- zone-out ends instance secrecy without a regen
 ev:RegisterEvent("PLAYER_TARGET_CHANGED")
-ev:SetScript("OnEvent", function(_, event)
-  if event == "PLAYER_TARGET_CHANGED" then
-    -- Target containers do NOT self-refresh on target swap (they only react to their own unit's
-    -- UNIT_AURA), so a target debuff bar/text goes stale until the new target fires an aura event.
-    -- Force a full re-parse of every non-player container. (The exact debuff bug the AuraLab found.)
+ev:RegisterEvent("UNIT_PET")            -- pet summoned/dismissed/replaced: pet containers go stale
+ev:SetScript("OnEvent", function(_, event, evUnit)
+  if event == "PLAYER_TARGET_CHANGED" or (event == "UNIT_PET" and evUnit == "player") then
+    -- Non-player containers do NOT self-refresh when their unit's IDENTITY changes (they only
+    -- react to their own unit's UNIT_AURA), so a target debuff bar goes stale on target swap and
+    -- a pet bar on summon/dismiss. Force a full re-parse of the affected containers.
+    -- (The exact debuff bug the AuraLab found; pet lane added with the Dark Transformation fix.)
+    local wantUnit = (event == "UNIT_PET") and "pet" or nil   -- nil = every non-player unit
     for _, perOwner in pairs(containers) do
       for unit, c in pairs(perOwner) do
-        if unit ~= "player" and c.UpdateAllAuras then c:UpdateAllAuras() end
+        if unit ~= "player" and (not wantUnit or unit == wantUnit) and c.UpdateAllAuras then
+          c:UpdateAllAuras()
+        end
       end
     end
     return
