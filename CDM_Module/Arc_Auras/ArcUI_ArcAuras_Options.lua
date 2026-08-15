@@ -510,7 +510,9 @@ local function SubmitAddAura(val)
 end
 
 local function SubmitAddTimer(idVal, durVal)
-    local spellID = tonumber((idVal or ""):gsub("[^%d]", ""))
+    -- extra parens: gsub returns (string, count) and an unparenthesized
+    -- second return lands in tonumber's BASE argument ("base out of range")
+    local spellID = tonumber(((idVal or ""):gsub("[^%d]", "")))
     local dur = tonumber(durVal or "")
     if not spellID or spellID <= 0 then return false, "Invalid spell ID" end
     if not dur or dur <= 0 then return false, "Duration must be a positive number" end
@@ -899,11 +901,13 @@ local function ShowAddPopup()
             for key, btn in pairs(modeBtns) do
                 btn:SetLabelSelected(key == m)
             end
-            if pg.ownCheck then pg.ownCheck:SetShown(m ~= "buff") end
-            if pg.ownLbl then pg.ownLbl:SetShown(m ~= "buff") end
+            -- own-debuffs filter only means something on the target lane
+            local showOwn = (m == "debuff" or m == "both")
+            if pg.ownCheck then pg.ownCheck:SetShown(showOwn) end
+            if pg.ownLbl then pg.ownLbl:SetShown(showOwn) end
         end
         local mx = 10
-        for _, m in ipairs({ { "buff", "Buff (you)" }, { "debuff", "Debuff (target)" }, { "both", "Both" } }) do
+        for _, m in ipairs({ { "buff", "Buff (you)" }, { "debuff", "Debuff (target)" }, { "both", "Both" }, { "pet", "Buff (pet)" } }) do
             local b = PopupBtn(pg, m[2], nil, 22)
             b:SetPoint("TOPLEFT", mx, -10)
             b:SetScript("OnClick", function() SelectMode(m[1]) end)
@@ -1616,7 +1620,8 @@ local function CreateCatalogIconEntry(index)
                 desc = desc .. "\nSpell ID: " .. (entry.spellID or "?")
                 desc = desc .. "\nArc ID: " .. entry.arcID
                 local mode = entry.unitMode == "debuff" and "Debuff (target)"
-                    or entry.unitMode == "both" and "Buff + Debuff" or "Buff (you)"
+                    or entry.unitMode == "both" and "Buff + Debuff"
+                    or entry.unitMode == "pet" and "Buff (pet)" or "Buff (you)"
                 desc = desc .. "\nType: |cffff88ffAura Icon|r — " .. mode
                 if entry.hasIconOverride then
                     desc = desc .. "\n|cffFFCC00Custom Icon|r (ID: " .. (entry.config.iconOverrideID or "?") .. ")"
