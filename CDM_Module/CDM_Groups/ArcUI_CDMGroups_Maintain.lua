@@ -60,15 +60,19 @@ end
 
 local function OnSetScale(self, scale)
     if self._cdmgSettingScale then return end
-    
+
     -- Skip Arc Aura frames - they manage their own scale via ArcAuras.ApplySettingsToFrame
     if self._arcAuraID then return end
-    
+
     local parent = self:GetParent()
     -- Check if in container OR if it's a free icon (check frame flag directly, not cdID lookup)
     local isInContainer = parent and parent._isCDMGContainer
     local isFreeIcon = self._cdmgIsFreeIcon
-    
+
+    -- NO free-flag heal here (the 3.7.12 vanishing-icons lesson): clearing
+    -- _cdmgIsFreeIcon on a transient lookup failure disarmed the hide fight.
+    -- Forcing scale 1 on a stale-flag frame is harmless; leave state alone.
+
     if not isInContainer and not isFreeIcon then return end
     
     -- Force scale to 1 (both container and free icons)
@@ -81,18 +85,35 @@ end
 
 local function OnSetSize(self, w, h)
     if self._cdmgSettingSize then return end
-    
+
     local parent = self:GetParent()
     -- Check if in container OR if it's a free icon (check frame flag directly)
     local isInContainer = parent and parent._isCDMGContainer
     local isFreeIcon = self._cdmgIsFreeIcon
-    
+
     -- Arc Aura frames: Only enforce size if they're in a group container
     -- Free Arc Auras manage their own size via ArcAuras.ApplySettingsToFrame
     if self._arcAuraID and not isInContainer then return end
-    
+
     if not isInContainer and not isFreeIcon then return end
-    
+
+    -- STALE FREE-FLAG HEAL — IN-CONTAINER ONLY (the 3.7.12 vanishing-icons
+    -- lesson): a frame inside a group container is DEFINITIONALLY not free,
+    -- so clearing leftover recycled-pool flags there is safe and fixes the
+    -- giant-grouped-icon bug (a previous occupant's free size stamped onto a
+    -- grouped icon). A NOT-in-container frame must NEVER be healed from this
+    -- hook: CDM refresh waves put legit free icons through transient states
+    -- where the freeIcons lookup fails (ClearCooldownID-then-hide pool
+    -- windows, mid-rebind occupant swaps), and clearing _cdmgIsFreeIcon on
+    -- that signal DISARMED DeferredHideFight — free icons vanished the
+    -- moment combat started and stayed gone until reload (3.7.12 code red).
+    -- Lookup failure below falls back to the stored size, exactly as 3.7.11.
+    if isFreeIcon and isInContainer then
+        self._cdmgIsFreeIcon = nil
+        self._cdmgFreeTargetSize = nil
+        isFreeIcon = false
+    end
+
     -- Get target size - for free icons, get from freeIcons table using frame ID
     local targetW, targetH
     if isFreeIcon then
@@ -151,6 +172,12 @@ local function OnSetSize(self, w, h)
         end
     end
     
+    -- CORRUPTION GUARD: never stamp a nonsensical size onto a frame — a
+    -- nil/NaN/absurd target means our bookkeeping is wrong, and skipping the
+    -- correction is strictly safer than enforcing garbage.
+    if not (targetW and targetW == targetW and targetW > 0 and targetW <= 512) then return end
+    if not (targetH and targetH == targetH and targetH > 0 and targetH <= 512) then return end
+
     -- Use 0.5 pixel tolerance (tight like reference CDMGroups)
     if math.abs((w or 0) - targetW) > 0.5 or math.abs((h or 0) - targetH) > 0.5 then
         self._cdmgSettingSize = true
@@ -283,32 +310,77 @@ end
 -- CDM calls these during rearrangement while its settings panel is open.
 -- Post-hooks immediately re-Show the frame if it should be visible.
 -- ═══════════════════════════════════════════════════════════════════════════
-local function OnSetShown_Managed(self, shown)
-    if shown then return end  -- Only fight SetShown(false)
+-- RELEASED-FRAME GUARD (the "clone icon" bug, 2 reports + Arc's import repro):
+-- CDM releases a pooled item frame by ClearCooldownID() FIRST (source-verified:
+-- RefreshData walks the pool and clears every frame beyond the current id list),
+-- THEN hides it via UpdateShownState. A managed frame with NO cooldownID is
+-- therefore CDM's corpse being legitimately reclaimed — fighting that hide kept
+-- it on screen as an unclickable styled clone in the group row (and, once CDM
+-- reparented it, as the floating empty square at the native viewer). Arc's own
+-- icons carry _arcAuraID instead of cooldownID and are still defended.
+local function IsReleasedCDMFrame(self)
+    return self.cooldownID == nil and self._arcAuraID == nil
+end
+
+-- DEFERRED VERDICT (timeline-proven pool race, 2026-08-12): the pool resetter
+-- runs Hide FIRST and only then clears cooldown data + layoutIndex
+-- (CooldownViewer OnLoad itemResetCallback, source-verified) — so at the
+-- moment our hook fires, a pool RELEASE is indistinguishable from the
+-- reclamation hides this fight exists for; the trace caught us resurrecting a
+-- corpse whose id was still set for one more instant (Hide <- Pools.lua:520,
+-- Show <- Maintain). Verdict therefore waits ONE FRAME: by then a released
+-- CDM frame has layoutIndex nil (and usually cooldownID nil) → let it die;
+-- a genuinely reclaimed member still has both → fight as before. A frame CDM
+-- re-acquired in the meantime is already shown → moot. Arc's own icons have
+-- no GetCooldownID and skip the release checks entirely.
+local function DeferredHideFight(self)
     if self._arcAllowHide then return end  -- ArcUI cleanup
     if self._arcHiddenByBar or self._arcHiddenUnequipped or self._arcSlotEmpty then return end
     if self._groupDragging or self._freeDragging then return end
-    
-    -- Check: is this frame still managed by us?
+    if IsReleasedCDMFrame(self) then return end  -- id already cleared: let it die
+
+    -- Only fight for frames we manage
     local parent = self:GetParent()
     local isGrouped = parent and parent._isCDMGContainer
     local isFree = self._cdmgIsFreeIcon
     if not isGrouped and not isFree then return end
-    
-    self:Show()
+
+    C_Timer.After(0, function()
+        if self:IsShown() then return end                     -- re-acquired/re-shown: moot
+        if self._arcAllowHide then return end                 -- state may have moved a frame
+        if self._arcHiddenByBar or self._arcHiddenUnequipped or self._arcSlotEmpty then return end
+        if self._groupDragging or self._freeDragging then return end
+        if self.GetCooldownID then
+            if self.cooldownID == nil then return end         -- released (id cleared)
+            if self.layoutIndex == nil then return end        -- released (pool resetter finished)
+        end
+        -- Blizzard's own Hide When Inactive: an INACTIVE frame with the
+        -- setting on is a LEGITIMATE hide (target swap away from a debuffed
+        -- unit, aura dropped) — resurrecting it defeated the user's setting
+        -- ("debuff icon should disappear when not applied but stays up").
+        -- Secrecy checked BEFORE any boolean test (secret booleans throw on
+        -- truthiness); nil/secret isActive = unknown = keep fighting.
+        local hwi = self.hideWhenInactive
+        if not (issecretvalue and issecretvalue(hwi)) and hwi then
+            local bIsActive = self.isActive
+            if not (issecretvalue and issecretvalue(bIsActive)) and bIsActive == false then
+                return
+            end
+        end
+        local p = self:GetParent()
+        if (p and p._isCDMGContainer) or self._cdmgIsFreeIcon then
+            self:Show()
+        end
+    end)
+end
+
+local function OnSetShown_Managed(self, shown)
+    if shown then return end  -- Only fight SetShown(false)
+    DeferredHideFight(self)
 end
 
 local function OnHide_Managed(self)
-    if self._arcAllowHide then return end
-    if self._arcHiddenByBar or self._arcHiddenUnequipped or self._arcSlotEmpty then return end
-    if self._groupDragging or self._freeDragging then return end
-    
-    local parent = self:GetParent()
-    local isGrouped = parent and parent._isCDMGContainer
-    local isFree = self._cdmgIsFreeIcon
-    if not isGrouped and not isFree then return end
-    
-    self:Show()
+    DeferredHideFight(self)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
