@@ -396,6 +396,11 @@ function AF.UpdateAuraFrame(frame)
   local currentAuraActive = HasAuraInstanceID(frame.auraInstanceID)
                          or (ns.FrameActive and ns.FrameActive.IsActive(frame)) or false
   local cdID          = frame.cooldownID
+  -- tracer: log only TRANSITIONS (this runs per aura event; steady state is noise)
+  if ns.TraceTap and lastAuraActive ~= currentAuraActive then
+    ns.TraceTap("AF", string.format("cd=%s visualAuraActive %s -> %s",
+      tostring(cdID), tostring(lastAuraActive), tostring(currentAuraActive)))
+  end
 
   local hasDelay = frame._arcDelayAlphaUntil and now < frame._arcDelayAlphaUntil
   if ns.DynamicLayoutDebug and ns.DynamicLayoutDebug.IsAlphaTraceEnabled
@@ -634,7 +639,14 @@ function AF.UpdateAuraFrame(frame)
         HideReadyGlow(frame)
       end
       frame._arcTargetGlow = true
-    elseif threshold >= 1.0 and not stateVisuals.glowThresholdSeconds then
+    elseif (threshold >= 1.0 and not stateVisuals.glowThresholdSeconds)
+        or (ns.API and ns.API.IS_121) then
+      -- 12.1: aura remaining-duration reads are walled, so the threshold
+      -- ticker can never evaluate — saved % / seconds thresholds collapse to
+      -- plain aura-active glow HERE (event-driven show/hide, no dead 0.5s
+      -- ticker burning cycles to reach the same fallback). The aura options
+      -- panel hides the threshold modes on 12.1 and says why; CDM Pandemic
+      -- Timing (the branch above) still works — it is Blizzard-driven.
       if ShouldShowReadyGlow(stateVisuals, frame) and isReadyOrPreview then
         ShowReadyGlow(frame, stateVisuals)
       else
@@ -733,6 +745,35 @@ function AF.InstallHooks(frame, cdID)
           self._arcDelayAlphaUntil = GetTime() + 0.05  -- 50ms ceiling; Layout fires next frame (~16ms) and clears it
           break
         end
+      end
+    end
+
+    -- PANDEMIC FLAG RELEASE (aura gone => no pandemic window, by definition).
+    -- This MUST live here, not only on Blizzard's HidePandemicStateFrame hook.
+    -- CDM only calls CheckPandemicTimeDisplay (the sole caller of Show/Hide
+    -- PandemicStateFrame) from its per-frame OnUpdate, and
+    -- NeedsOnUpdateRegistration() is `pandemicAlertTriggerTime or next(alertsByEvent)`.
+    -- Blizzard nils pandemicAlertTriggerTime the moment the alert PLAYS
+    -- ("Just clear the alert state once it plays") and re-runs
+    -- RefreshOnUpdateRegistration -> the frame is UNREGISTERED from OnUpdate
+    -- while the glow is still up. So HidePandemicStateFrame never fires again
+    -- and PandemicGlowKill -- previously the ONLY clearer of this flag -- never
+    -- ran: the glow stayed until an unrelated refresh (target swap ->
+    -- OnNewTarget -> RefreshData) happened to clear it. That is the reported
+    -- "pandemic glow doesn't go away until I stop looking at the target".
+    -- Clearing is UNCONDITIONAL on config on purpose: every SETTER is gated on
+    -- glowFollowPandemic, so a gated clear strands the flag forever when the
+    -- user turns that option off (observed live: _arcPandemicGlowActive=true
+    -- with glowFollowPandemic=false). A stranded true is not inert -- it
+    -- suppresses HideAuraActiveGlow in the guards here and in CooldownState.
+    -- Hiding stays config-gated inside ClearPandemicGlow; only the flag is
+    -- released here, before the glow decision below re-derives from live state.
+    if not isActive and self._arcPandemicGlowActive then
+      if ns.CDMEnhance and ns.CDMEnhance.ClearPandemicGlow then
+        ns.CDMEnhance.ClearPandemicGlow(self)
+      else
+        self._arcPandemicGlowActive = nil
+        self._arcPandemicLastFire   = nil
       end
     end
 

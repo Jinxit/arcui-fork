@@ -1086,14 +1086,11 @@ local function CreateArcAuraFrame(arcID, config)
     frame:SetScript("OnLeave", function()
         GameTooltip:Hide()
     end)
-    
-    -- Right-click for options
-    frame:SetScript("OnClick", function(self, button)
-        if button == "RightButton" then
-            ArcAuras.ShowContextMenu(self)
-        end
-    end)
-    frame:RegisterForClicks("RightButtonUp")
+
+    -- Right-click context menu REMOVED (3.8.0.a, by request): everything it
+    -- offered (configure, always-show, change icon, remove) lives in the Arc
+    -- Auras panel / CDM Icons catalog. No OnClick, no RegisterForClicks —
+    -- the ShowContextMenu functions below are unreachable from gameplay.
     
     return frame
 end
@@ -2525,18 +2522,40 @@ function ArcAuras.ApplySettingsToFrame(arcID, frame)
         for groupName, group in pairs(ns.CDMGroups.groups) do
             if group.members and group.members[arcID] then
                 inGroup = true
-                -- Use group's slot dimensions (respects group iconSize/width/height)
-                if ns.CDMGroups.GetSlotDimensions then
-                    width, height = ns.CDMGroups.GetSlotDimensions(group.layout)
+                -- ONE SIZE AUTHORITY (panel-close border bleed + the 79.0 vs
+                -- 79.2px drag mismatch): the number every CDM frame in the
+                -- group is ACTUALLY sized to is frame._cdmgSlotW/H — Layout's
+                -- SetupFrameInContainer pixel-snaps the slot to the physical
+                -- grid (44 ui -> 43.8888 = exactly 79px) before SetSize and
+                -- stores it there. member._effectiveIconW holds the RAW slot
+                -- (44 = 79.2px); preferring it made arc frames 0.2px wider
+                -- than their CDM neighbors after every post-drag apply
+                -- (/afi group verdict-proven). Snapped slot FIRST, raw
+                -- effective size as fallback, raw GetSlotDimensions only for
+                -- the never-laid-out case. Per-icon overrides (useGroupScale
+                -- OFF) replicate Layout's own override math instead, so they
+                -- are not stomped to slot size.
+                local m = group.members[arcID]
+                if cfg.useGroupScale == false then
+                    local s = cfg.scale or 1.0
+                    width  = (cfg.width  or frame._cdmgSlotW or 44) * s
+                    height = (cfg.height or frame._cdmgSlotH or 44) * s
                 else
-                    -- Fallback: calculate manually
-                    local baseScale = 36
-                    local iconSize = group.layout.iconSize or 36
-                    local iconWidth = group.layout.iconWidth or 36
-                    local iconHeight = group.layout.iconHeight or 36
-                    local scale = iconSize / baseScale
-                    width = iconWidth * scale
-                    height = iconHeight * scale
+                    width  = frame._cdmgSlotW or (m and m._effectiveIconW)
+                    height = frame._cdmgSlotH or (m and m._effectiveIconH)
+                end
+                if not width or not height then
+                    if ns.CDMGroups.GetSlotDimensions then
+                        width, height = ns.CDMGroups.GetSlotDimensions(group.layout)
+                    else
+                        local baseScale = 36
+                        local iconSize = group.layout.iconSize or 36
+                        local iconWidth = group.layout.iconWidth or 36
+                        local iconHeight = group.layout.iconHeight or 36
+                        local scale = iconSize / baseScale
+                        width = iconWidth * scale
+                        height = iconHeight * scale
+                    end
                 end
                 break
             end
@@ -2840,6 +2859,26 @@ function ArcAuras.ShowTooltip(frame)
             GameTooltip:AddLine(config.name or "Custom Timer", 1, 1, 1)
         end
         GameTooltip:AddLine("|cffFFCC00Custom Timer|r", 1, 0.8, 0)
+    else
+        -- AURA ICONS (arc_aura_<spellID>) and anything else without a typed
+        -- config: show the real SPELL tooltip. Without this the holder fell
+        -- through every branch and rendered only the "Arc Auras" header + the
+        -- ID readout — visible whenever the engine button is hidden, i.e. the
+        -- aura-missing GHOST state (while the aura is up the engine button
+        -- covers the holder and Blizzard's own aura tooltip shows instead).
+        -- The spellID is carried by the arcID; fall back to stored config.
+        local spellID = config.spellID
+        if not spellID then
+            local arcID = frame._arcAuraID or frame._arcCooldownID
+            if type(arcID) == "string" then
+                spellID = tonumber(arcID:match("^arc_aura_(%d+)$"))
+            end
+        end
+        if spellID then
+            GameTooltip:SetSpellByID(spellID)
+        elseif config.name then
+            GameTooltip:AddLine(config.name, 1, 1, 1)
+        end
     end
     
     GameTooltip:AddLine(" ")
@@ -2873,7 +2912,6 @@ function ArcAuras.ShowTooltip(frame)
         end
     end
     
-    GameTooltip:AddLine("Right-click for options", 0.7, 0.7, 0.7)
     
     if frame._isOnCooldown and frame._remaining then
         GameTooltip:AddLine(string.format("Cooldown: %.1fs", frame._remaining), 1, 0.8, 0)
@@ -4151,8 +4189,20 @@ function ArcAuras.RefreshVisibility()
 
         if not config then
             -- Frame exists but config missing — hide but don't destroy
-            -- (SyncToProfile handles destruction, this is visibility-only)
-            frame:Hide()
+            -- (SyncToProfile handles destruction, this is visibility-only).
+            -- TIMERS / TOTEMS / AURA HOLDERS: their configs live in their OWN
+            -- stores, never in trackedSpells/trackedItems — this lookup
+            -- ALWAYS misses for them, and the unconditional Hide here blinked
+            -- every such icon on every RefreshVisibility while the group
+            -- maintenance re-showed it ~15ms later (the in-combat flicker;
+            -- timeline-proven: Hide@here vs Maintain:372 Show, repeating).
+            -- Their engines own their visibility — never touch them here.
+            local engineOwned = frame._arcIsCustomTimer or frame._arcIsAuraIcon
+                or (type(arcID) == "string" and (arcID:match("^arc_timer_")
+                    or arcID:match("^arc_totem_") or arcID:match("^arc_aura_")))
+            if not engineOwned then
+                frame:Hide()
+            end
         else
             local shouldDestroy = false
             local shouldHide = false
