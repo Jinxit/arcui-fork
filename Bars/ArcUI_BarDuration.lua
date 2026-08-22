@@ -105,8 +105,11 @@ BD.logBuf = {}                      -- exposed so the (unshipped) debug tool can
 local logBuf, LOG_MAX = BD.logBuf, 300
 local logWin, logEdit
 local function Log(fmt, ...)
-  if not BD.debug then return end
+  local tap = ns.TraceTap
+  if not BD.debug and not tap then return end
   local msg = (select("#", ...) > 0) and fmt:format(...) or fmt
+  if tap then tap("BD", msg) end
+  if not BD.debug then return end
   logBuf[#logBuf + 1] = date("%H:%M:%S ") .. msg
   if #logBuf > LOG_MAX then table.remove(logBuf, 1) end
   -- NEVER to chat by default: this logs on every refresh of every bar, which
@@ -1167,8 +1170,16 @@ function BD.Attach(barFrame, fs, cooldownID, trackedSpellID, unit, opts)
     Log("Attach: container(%s) not ready -> pending (cd=%s)", unit, tostring(cooldownID))
     return
   end
-  local assist = (unit == "player") or (UnitCanAssist and UnitCanAssist("player", unit))
-  local filter = assist and "HELPFUL" or "HARMFUL"
+  -- Filter by LANE SEMANTICS, never live unit state: UnitCanAssist("player",
+  -- "pet") is FALSE while the pet does not exist — which is exactly the case
+  -- during the login prebuild — so the pet slot got baked with a HARMFUL
+  -- filter for the whole session and the pet's buff could never match (the
+  -- "empty pet bar after every reload" bug). The lanes are fixed by design:
+  -- target = the player's OWN debuffs (HARMFUL|PLAYER — plain HARMFUL lit
+  -- bars up for ANY ally's copy of the debuff, e.g. a second Arms warrior's
+  -- Colossus Smash; the pre-12.1 CDM path was own-only implicitly);
+  -- player/pet = buffs (HELPFUL, any source — external buffs must match).
+  local filter = (unit == "target") and "HARMFUL|PLAYER" or "HELPFUL"
   -- threshold overlays present -> colour/texture split: the base goes FLAT
   -- too (the shade slot below carries the texture for every layer at once)
   local nSteps = opts.applicationSteps and #opts.applicationSteps or 0
@@ -1312,7 +1323,12 @@ local function MirrorHookBar(srcBar)
   hooksecurefunc(srcBar, "SetValue", function(self, v)
     for ourFrame, rec in pairs(mirrorByBar) do
       if rec.srcBar == self and ourFrame.bar and MirrorSourceValid(rec) then
-        ourFrame.bar:SetValue(v)
+        -- SMOOTHING: SetValue's second argument is the interpolation enum, and it
+        -- is NeverSecret -- we supply it, so a secret value animates fine. The
+        -- mirror simply never passed one, so every push was Immediate and the bar
+        -- stepped. rec.interp is nil when the user has Smooth Fill off, which is
+        -- the documented default (Immediate).
+        ourFrame.bar:SetValue(v, rec.interp)
         mirDiag.value = mirDiag.value + 1
         -- DURATION TEXT (Arc's call: value-derived ONLY -- the normal text
         -- sources are cut out entirely in mirror mode): whole seconds from
@@ -1337,8 +1353,23 @@ local function MirrorHookBar(srcBar)
         -- the INACTIVE push is literal SetMinMaxValues(0, 0) -- non-secret
         -- constants, so this compare is safe -- clear the mirrored text so no
         -- stale number lingers after the timer ends
-        if rec.fs and not (issecretvalue and issecretvalue(mx)) and mx == 0 then
+        local inactive = not (issecretvalue and issecretvalue(mx)) and mx == 0
+        if rec.fs and inactive then
           rec.fs:SetText("")
+        end
+        -- FILL-MODE LAYER (Display's ApplyMirrorFillLayer): it paints the gap the
+        -- drain texture leaves behind, so an inactive entry -- zero-width drain --
+        -- would leave the whole bar looking FULL. The active push carries a SECRET
+        -- duration, so "mx is secret" is itself the active signal.
+        -- gate on the MODE FLAG, not on the texture existing: the texture is
+        -- pooled and merely hidden when the user switches back to drain
+        local fillTex = ourFrame._mirrorFillActive and ourFrame._mirrorFillTex
+        if fillTex then
+          fillTex:SetShown(not inactive)
+          -- re-assert the drain's alpha-0 at the timer edge: ApplyAppearance can
+          -- run between bar updates and restore it, which would put the mirrored
+          -- drain back on top of the fill layer
+          if not inactive then ourFrame.bar:SetAlpha(0) end
         end
       end
     end
@@ -1352,11 +1383,12 @@ end
 -- update): re-resolves the CDM item frame each time, so CDM frame
 -- reassignment self-heals on the next update. Returns true when a bar-kind
 -- CDM item was found and hooked.
-function BD.AttachMirror(barFrame, fs, cooldownID)
+function BD.AttachMirror(barFrame, fs, cooldownID, interp)
   if not (barFrame and cooldownID and cooldownID > 0) then return false end
   local rec = mirrorByBar[barFrame] or {}
   rec.cooldownID = cooldownID
   rec.fs = fs
+  rec.interp = interp   -- StatusBarInterpolation for the mirrored SetValue (nil = Immediate)
   mirrorByBar[barFrame] = rec
   -- registry lookups are COLON methods (self = the registry)
   local f = ns.FrameRegistry and ns.FrameRegistry.GetValidFrameForCooldownID
@@ -1405,6 +1437,23 @@ function BD.Detach(barFrame)
       if sub.container.UpdateAllAuras then sub.container:UpdateAllAuras() end
     end
   end
+  -- RETIRE the owner's containers outright (hide + evict) so the NEXT Attach
+  -- builds FRESH ones. THE AURA-ICONS LAW, now enforced here too: a container
+  -- that has lived through combat carries forbidden aspects from displaying
+  -- secret data, and a later AddAuraSlot into it dies inside Blizzard's frame
+  -- provider ("child would inherit forbidden aspects"). Re-slotting the
+  -- cached container is why EVERY post-combat rewire — threshold band edits
+  -- (ApplyStyle's recreate), the options panel's texture detach/re-attach —
+  -- left the binding dead until a reload. One container, ONE AddAuraSlot,
+  -- ever. Hiding retires it (buttons are its children); the leaked invisible
+  -- 1x1 frame per rewire is the same accepted cost as the aura icons module.
+  local perOwner = containers[barFrame]
+  if perOwner then
+    for _, c in pairs(perOwner) do
+      if c.Hide then c:Hide() end
+    end
+    containers[barFrame] = nil
+  end
 end
 
 function BD.DetachAll()
@@ -1438,6 +1487,8 @@ function BD.ApplyStyle(barFrame, durationFrame, showDuration, decimals, duration
   end
   if blocked then
     styleDeferred[barFrame] = { durationFrame, showDuration, decimals, durationColor, baseColor, fillDirection, durFormatter, textColorEnabled, colorKey }
+    Log("ApplyStyle: BLOCKED (buttons forbidden) -> deferred (cd=%s key %s->%s)",
+      tostring(a.cooldownID), tostring(a.colorKey), tostring(colorKey))
     return
   end
   styleDeferred[barFrame] = nil
@@ -1459,6 +1510,9 @@ function BD.ApplyStyle(barFrame, durationFrame, showDuration, decimals, duration
   -- therefore served by RECREATING the slot: a fresh AddAuraSlot wires the new
   -- formatter/direction inside its own init window (legal even in combat).
   if (formatterChanged or directionChanged) and a.req then
+    Log("ApplyStyle: RECREATE (cd=%s, fmtChanged=%s dirChanged=%s, key %s -> %s, dec %s -> %s)",
+      tostring(a.cooldownID), tostring(formatterChanged), tostring(directionChanged),
+      tostring(a.colorKey), tostring(colorKey), tostring(a.decimals), tostring(decimals))
     local req = a.req
     req.opts.durDecimals      = decimals
     req.opts.durFormatter     = durFormatter
@@ -1519,6 +1573,16 @@ function BD.ApplyStyle(barFrame, durationFrame, showDuration, decimals, duration
       ReassertStepGeometry(sub, barFrame)
       ReassertDurGeometry(sub, barFrame)
     end
+    if at then
+      -- THE TOGGLE IS THE DEADLINE: Show Duration OFF must hide the engine's
+      -- ArcTimer holder NOW — the timer is engine-driven and keeps counting
+      -- otherwise ("disabled duration text but it still shows on the bar").
+      -- Holder writes are legal here: the blocked path above already
+      -- deferred us when the button partition is forbidden. ON re-shows it.
+      if sub.holder and sub.holder.SetShown then
+        sub.holder:SetShown(showDuration and true or false)
+      end
+    end
     if at and showDuration then
       if sub.holder and durationFrame and sub.holder.SetFrameLevel then
         sub.holder:SetFrameStrata(durationFrame:GetFrameStrata())
@@ -1536,22 +1600,73 @@ function BD.ApplyStyle(barFrame, durationFrame, showDuration, decimals, duration
   a.decimals = decimals
   a.textColorEnabled = textColorEnabled
   a.colorKey = colorKey
+  a.showDuration = showDuration and true or false
+  Log("ApplyStyle: plain restyle done (cd=%s key=%s tce=%s)",
+    tostring(a.cooldownID), tostring(colorKey), tostring(textColorEnabled))
 end
 
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- CONTAINER REPAIR (12.1 engine bug -- full write-up in ns.CDMShared)
+-- Candidate filters fail OPEN whenever UnitCanAssist fails (vehicles,
+-- cinematics, faction change, range, encounter end), so a bar can start lighting
+-- on an ARBITRARY aura. Bars previously had NO re-assertion at all: filters were
+-- written at attach/retarget/detach and never re-pushed, so a bar that lost its
+-- filter mid-fight stayed wrong until the next attach.
+-- Cycle the container (SetEnabled is guarded on change, so only false->true
+-- re-registers events and refreshes), then re-push each sub's believed-correct
+-- filter. Data-only, so it is legal in combat.
+-- ═══════════════════════════════════════════════════════════════════════════
+function BD.RepairContainers()
+  local Sh = ns.CDMShared
+  if Sh and Sh.RepairAuraContainer then
+    for _, perOwner in pairs(containers) do
+      for _, c in pairs(perOwner) do
+        Sh.RepairAuraContainer(c)
+      end
+    end
+  end
+  -- Re-push what each live sub should be filtering on. Everything still in
+  -- attached[] IS live: Detach parks the filters and then clears the entry
+  -- (attached[barFrame] = nil, ~line 1429), so there is no parked state to
+  -- preserve here and no need to branch on one.
+  for _, a in pairs(attached) do
+    local subs = a and a.subs
+    if subs and a.spellIDs then
+      for _, sub in pairs(subs) do
+        if sub.container and sub.key and sub.container.SetAuraSlotCandidateFilters then
+          sub.container:SetAuraSlotCandidateFilters(sub.key, { includeSpellIDs = a.spellIDs })
+        end
+      end
+    end
+  end
+end
 -- ── combat deferral + eager container creation + target-swap refresh ─────────
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")   -- zone-out ends instance secrecy without a regen
 ev:RegisterEvent("PLAYER_TARGET_CHANGED")
-ev:SetScript("OnEvent", function(_, event)
-  if event == "PLAYER_TARGET_CHANGED" then
-    -- Target containers do NOT self-refresh on target swap (they only react to their own unit's
-    -- UNIT_AURA), so a target debuff bar/text goes stale until the new target fires an aura event.
-    -- Force a full re-parse of every non-player container. (The exact debuff bug the AuraLab found.)
+ev:RegisterEvent("UNIT_PET")            -- pet summoned/dismissed/replaced: pet containers go stale
+ev:SetScript("OnEvent", function(_, event, evUnit)
+  -- LAZY REPAIR REGISTRATION. This file loads BEFORE ArcUI_CDM_Shared.lua (toc
+  -- line 42 vs 93), so ns.CDMShared does not exist at our file scope. Register
+  -- on the first event we receive instead, by which point every file is loaded.
+  -- Idempotent on the CDMShared side, so repeating it costs nothing.
+  if ns.CDMShared and ns.CDMShared.RegisterAuraContainerRepair then
+    ns.CDMShared.RegisterAuraContainerRepair(BD.RepairContainers)
+  end
+  if event == "PLAYER_TARGET_CHANGED" or (event == "UNIT_PET" and evUnit == "player") then
+    -- Non-player containers do NOT self-refresh when their unit's IDENTITY changes (they only
+    -- react to their own unit's UNIT_AURA), so a target debuff bar goes stale on target swap and
+    -- a pet bar on summon/dismiss. Force a full re-parse of the affected containers.
+    -- (The exact debuff bug the AuraLab found; pet lane added with the Dark Transformation fix.)
+    local wantUnit = (event == "UNIT_PET") and "pet" or nil   -- nil = every non-player unit
     for _, perOwner in pairs(containers) do
       for unit, c in pairs(perOwner) do
-        if unit ~= "player" and c.UpdateAllAuras then c:UpdateAllAuras() end
+        if unit ~= "player" and (not wantUnit or unit == wantUnit) and c.UpdateAllAuras then
+          c:UpdateAllAuras()
+        end
       end
     end
     return
@@ -1585,13 +1700,17 @@ end)
 SLASH_ARCBARDUR1 = "/arcbardur"
 SlashCmdList["ARCBARDUR"] = function(msg)
   msg = (msg or ""):gsub("%s+", ""):lower()
-  -- PERSISTED: the interesting failures happen during the LOAD WINDOW, before
-  -- any slash command can run, so the flag has to survive a /reload.
+  -- The saved flag is written for a future load-window capture but nothing reads
+  -- it back at load, so debug is ALWAYS off after a reload (BD.debug = false at
+  -- file scope). That is deliberate for now: the trace builds a table per
+  -- duration-bar refresh, so a diagnostic that silently survives reloads would
+  -- cost every user who ever ran it once. Do not advertise persistence until a
+  -- restore is actually wired.
   if msg == "debug" or msg == "on" then
     BD.debug = true
     local g = ns.API and ns.API.GetGlobalDB and ns.API.GetGlobalDB()
     if g then g.barDurDebug = true end
-    print("|cff33ff99[ArcBarDur]|r debug ON and SAVED (survives /reload). '/arcbardur log' opens the copyable window.")
+    print("|cff33ff99[ArcBarDur]|r debug ON for THIS session (a /reload clears it). '/arcbardur log' opens the copyable window.")
     return
   end
   if msg == "off" then
@@ -1711,8 +1830,10 @@ SlashCmdList["ARCBARDUR"] = function(msg)
   local any = false
   for bn, t in pairs(BD.lastTrace) do
     any = true
-    print(("  bar %s: active=%s hasAuraInfo=%s cooldownID=%s trackedSpellID=%s showDuration=%s secret=%s"):format(
-      tostring(bn), tostring(t.active), tostring(t.hasAuraInfo),
+    -- hasTotemInfo was recorded but never printed; it is the field that says
+    -- whether a totem bar took the totem branch or fell through to a mirror
+    print(("  bar %s: active=%s hasAuraInfo=%s hasTotemInfo=%s cooldownID=%s trackedSpellID=%s showDuration=%s secret=%s"):format(
+      tostring(bn), tostring(t.active), tostring(t.hasAuraInfo), tostring(t.hasTotemInfo),
       tostring(t.cooldownID), tostring(t.trackedSpellID), tostring(t.showDuration), tostring(t.secret)))
   end
   if not any then print("  (no duration-bar updates traced yet -- is the bar active/shown?)") end
