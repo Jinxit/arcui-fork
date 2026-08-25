@@ -69,6 +69,34 @@ end
 
 function AuraIcons.MakeID(spellID) return ID_PREFIX .. tostring(spellID) end
 
+-- COPIES OF THE SAME SPELL. The arcID used to BE the spell id, so a second icon
+-- for one aura was impossible (Create just handed back the existing one) and the
+-- id could never be edited. The FIRST icon for a spell still gets the historical
+-- key, so nothing anyone already made changes identity, position, styling or
+-- group slot; further copies get "_2", "_3", ... Every other consumer of the
+-- scheme matches on the arc_aura_ PREFIX, which a suffixed id still satisfies.
+local function NextFreeAuraID(db, spellID)
+    local base = AuraIcons.MakeID(spellID)
+    if not db.auraIcons[base] then return base end
+    local n = 2
+    while db.auraIcons[base .. "_" .. n] do n = n + 1 end
+    return base .. "_" .. n
+end
+
+-- "Is this spell already tracked by some icon?" Replaces the direct
+-- db.auraIcons[MakeID(id)] lookups, which only ever found the FIRST copy.
+-- Matches the PRIMARY spellID only, exactly like the key lookup it replaces --
+-- the candidate map (def.spellIDs) is a wider net and the callers that need it
+-- (the CDM import) build their own set from it.
+function AuraIcons.FindBySpellID(spellID)
+    local db = GetDB()
+    if not db or not spellID then return nil end
+    for arcID, def in pairs(db.auraIcons) do
+        if def.spellID == spellID then return arcID, def end
+    end
+    return nil
+end
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- CONTAINERS — ONE PER ICON PER UNIT, never shared.
 --
@@ -86,16 +114,30 @@ function AuraIcons.MakeID(spellID) return ID_PREFIX .. tostring(spellID) end
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- Containers only self-refresh on UNIT_AURA of their unit — target containers
--- go STALE on target swap (in-game confirmed). UpdateAllAuras on our own
--- PLAYER_TARGET_CHANGED closes the gap.
+-- go STALE on target swap (in-game confirmed), and pet containers when the
+-- pet is summoned/dismissed/replaced. UpdateAllAuras on our own
+-- PLAYER_TARGET_CHANGED / UNIT_PET closes both gaps.
 local targetSwapWatcher
 local function ArmTargetSwapRefresh()
     if targetSwapWatcher then return end
     targetSwapWatcher = CreateFrame("Frame")
     targetSwapWatcher:RegisterEvent("PLAYER_TARGET_CHANGED")
-    targetSwapWatcher:SetScript("OnEvent", function()
+    -- containers do NOT self-refresh when their unit changes identity (Blizzard's
+    -- own UpdateAllAuras comment says it is exposed for exactly this), so focus
+    -- needs the same nudge target already had
+    targetSwapWatcher:RegisterEvent("PLAYER_FOCUS_CHANGED")
+    targetSwapWatcher:RegisterEvent("UNIT_PET")
+    -- party lanes: partyN points at a different person after a roster change, so
+    -- those containers need the same nudge target and focus get
+    targetSwapWatcher:RegisterEvent("GROUP_ROSTER_UPDATE")
+    targetSwapWatcher:SetScript("OnEvent", function(_, event, evUnit)
+        if event == "UNIT_PET" and evUnit ~= "player" then return end
+        local wantUnit = (event == "UNIT_PET") and "pet"
+            or (event == "PLAYER_FOCUS_CHANGED") and "focus"
+            or nil
         for _, rec in ipairs(allContainers) do
-            if rec.unit ~= "player" and type(rec.frame.UpdateAllAuras) == "function" then
+            if rec.unit ~= "player" and (not wantUnit or rec.unit == wantUnit)
+               and type(rec.frame.UpdateAllAuras) == "function" then
                 rec.frame:UpdateAllAuras()
             end
         end
@@ -128,15 +170,191 @@ end
 -- BUTTON WIRING (create-time only; regions are statically configured)
 -- ═══════════════════════════════════════════════════════════════════════════
 
-local function WireAuraButton(btn)
+-- ── STACK-TEXT FORMATTER (12.1) — LIVE REGISTRY ─────────────────────────────
+-- The engine's default application-count formatter hides the number at 0/1
+-- stacks (CDM parity). A NumericRuleFormatter replaces it WHOLESALE and its
+-- breakpoints run on the REAL (secret) count C-side — which restores both
+-- options the 12.1 wall took away from stack text: "Show at 1 Stack"
+-- (breakpoint at 1) and stack threshold COLORS (color escapes baked per band).
+--
+-- LIFECYCLE (the post-3.7.10.c lesson, Blizzard source verified): each slot's
+-- button is created EXACTLY ONCE at AddAuraSlot (per-slot provider, batch
+-- size 1) and initializeFrame never re-runs — anything read at wire time is
+-- frozen into the binding until an explicit re-bind. The .c build derived the
+-- formatter from settings at wire time, and the ADDON_LOADED prebuild runs
+-- BEFORE the AceDB exists (GetIconSettings returned nil), so EVERY login
+-- reverted to the engine-default formatter ("settings not being restored").
+--
+-- The fix is ONE PERSISTENT formatter object per icon key:
+--   * the engine stores the OBJECT and calls FormatNumber on it on every
+--     aura update (ApplyApplicationCount, source-verified) — so refreshing
+--     the object's breakpoints re-derives the display with NO slot or button
+--     work: plain userdata calls, legal in ANY context including mid-key;
+--   * belt-and-suspenders (in case the engine copies the formatter at bind
+--     time), ApplySettings re-binds SetApplicationCount on ACCESSIBLE
+--     buttons whenever the registry version moves — SetApplicationCount
+--     re-processes options and refreshes the display immediately;
+--   * settings resolve through GetIconSettings, with a READ-ONLY raw
+--     ArcUIDB fallback for the ADDON_LOADED window (per-icon chargeText
+--     lives in raw spec storage that IS loaded before the AceDB exists).
+-- Per-icon slots only — the dynamic Aura Group slots serve changing
+-- occupants and get no per-icon formatter (GetLiveFormatter(nil) = nil).
+local function StackColorEscape(c)
+    return string.format("|c%02x%02x%02x%02x", 255,
+        math.floor((c.r or 1) * 255 + 0.5),
+        math.floor((c.g or 1) * 255 + 0.5),
+        math.floor((c.b or 1) * 255 + 0.5))
+end
+
+-- Read-only raw fallback for the load window. Never creates tables: a bad
+-- early spec key must not fabricate spec entries (the 3.7.9 phantom-spec
+-- lesson), so this only follows keys that already exist.
+local function RawChargeTextFallback(key)
+    local charName = UnitName and UnitName("player")
+    if not charName or charName == "Unknown" then return nil end
+    local realm = GetRealmName and GetRealmName()
+    if not realm then return nil end
+    local charDB = ArcUIDB and ArcUIDB.char and ArcUIDB.char[charName .. " - " .. realm]
+    local cdm = charDB and charDB.cdmGroups
+    if not cdm or not cdm.specData then return nil end
+    local specKey = (ns.CDMGroups and ns.CDMGroups.currentSpec) or cdm.lastActiveSpec
+    if not specKey then
+        local specIndex = GetSpecialization and GetSpecialization()
+        local _, _, classID = UnitClass("player")
+        if not specIndex or not classID then return nil end
+        specKey = "class_" .. classID .. "_spec_" .. specIndex
+    end
+    local specData = cdm.specData[specKey]
+    local profiles = specData and specData.layoutProfiles
+    local profile = profiles and (profiles[specData.activeProfile or "Default"] or profiles["Default"])
+    local iconSettings = profile and profile.iconSettings
+    local s = iconSettings and iconSettings[tostring(key)]
+    return s and s.chargeText or nil
+end
+
+-- Current breakpoint list for an icon's settings. ALWAYS returns a list —
+-- when the features are off it mimics the engine default (hidden at 0/1,
+-- plain number at 2+) so the live formatter can stay bound permanently.
+local function ComputeStackBreakpoints(key)
+    local cfg = ns.CDMEnhance and ns.CDMEnhance.GetIconSettings and ns.CDMEnhance.GetIconSettings(key)
+    local cht = cfg and cfg.chargeText
+    if not cht then cht = RawChargeTextFallback(key) end
+    local showAtOne = cht and cht.enabled ~= false and cht.showSingleStack == true
+    local bands
+    if cht and cht.enabled ~= false and cht.thresholdColorEnabled
+       and type(cht.thresholdBands) == "table" then
+        bands = {}
+        for i = 1, 6 do
+            local b = cht.thresholdBands[i]
+            local t = b and b.enabled and tonumber(b.threshold)
+            if t and t >= 1 and b.color then bands[#bands + 1] = { t = t, c = b.color } end
+        end
+        table.sort(bands, function(a, b2) return a.t < b2.t end)
+        if #bands == 0 then bands = nil end
+    end
+
+    -- Edges: 0 (always hidden), 1 (shown iff Show at 1), 2 (always shown),
+    -- plus every band minimum. Highest band whose minimum is reached colors
+    -- the segment; below the lowest band the fontstring's own color shows.
+    local edgeSet = { [0] = true, [1] = true, [2] = true }
+    if bands then for _, b in ipairs(bands) do edgeSet[b.t] = true end end
+    local edges = {}
+    for v in pairs(edgeSet) do edges[#edges + 1] = v end
+    table.sort(edges)
+
+    local bps = {}
+    for _, lo in ipairs(edges) do
+        local fmtStr
+        if lo == 0 or (lo == 1 and not showAtOne) then
+            fmtStr = ""
+        else
+            local esc
+            if bands then
+                for _, b in ipairs(bands) do
+                    if b.t <= lo then esc = StackColorEscape(b.c) end
+                end
+            end
+            fmtStr = esc and (esc .. "%d|r") or "%d"
+        end
+        bps[#bps + 1] = { threshold = lo, format = fmtStr }
+    end
+    return bps
+end
+
+-- exported: the CDM count overlay owns PER-FRAME formatter objects and
+-- rewrites their rules on occupant/settings changes (frames shuffle
+-- cooldownIDs mid-key; a shared per-cdID object couldn't be swapped there)
+AuraIcons.ComputeStackBreakpoints = ComputeStackBreakpoints
+
+local liveFormatters = {}          -- key (arcID string / CDM cooldownID number) -> formatter
+local liveFormatterVersion = 0     -- bumped on refresh; buttons re-bind when stale
+
+local function GetLiveFormatter(key)
+    if not key then return nil end   -- dynamic group buttons: engine default
+    if not (C_StringUtil and C_StringUtil.CreateNumericRuleFormatter) then return nil end
+    local f = liveFormatters[key]
+    if not f then
+        f = C_StringUtil.CreateNumericRuleFormatter()
+        if not f then return nil end
+        liveFormatters[key] = f
+    end
+    f:SetBreakpoints(ComputeStackBreakpoints(key))
+    return f
+end
+AuraIcons.GetLiveFormatter = GetLiveFormatter
+-- legacy export name (the CDM count overlay binds through this)
+AuraIcons.BuildStackFormatter = GetLiveFormatter
+
+-- Re-derive every registered formatter's breakpoints from CURRENT settings.
+-- Plain userdata + saved-variable reads — legal anywhere, including mid-key.
+function AuraIcons.RefreshLiveFormatters()
+    liveFormatterVersion = liveFormatterVersion + 1
+    for key, f in pairs(liveFormatters) do
+        f:SetBreakpoints(ComputeStackBreakpoints(key))
+    end
+end
+
+local function WireAuraButton(btn, arcID)
     -- The engine can re-run initializeFrame on the same frame — wire once
     if btn._arcWired then return end
     btn._arcWired = true
+    -- Opaque backdrop UNDER the icon art: the holder's ghost renders BEHIND
+    -- the button, so a translucent active icon (Active Alpha < 1) would
+    -- composite over the ghost and read as "not dimmed at all". The plate
+    -- ignores the button's alpha (stays opaque under the dimmed art) and
+    -- lives/dies with the button's engine-driven visibility, so the ghost
+    -- shows through exactly when the aura is down.
+    local plate = btn:CreateTexture(nil, "BACKGROUND", nil, -8)
+    plate:SetAllPoints()
+    plate:SetColorTexture(0, 0, 0, 1)
+    plate:SetIgnoreParentAlpha(true)
+    btn._arcPlate = plate
+
     -- Icon art (engine-fed; texcoord matches Arc icon zoom look)
     local icon = btn:CreateTexture(nil, "ARTWORK")
     icon:SetAllPoints()
     icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     btn._arcIcon = icon
+
+    -- ══ CUSTOM ICON on the ACTIVE button ══════════════════════════════
+    -- The engine OWNS the art above: we hand it over with SetIcon() below and
+    -- it repaints from live (secret) aura data, so SetTexture-ing it is not an
+    -- option. Instead paint a SECOND texture ONE ARTWORK sublevel ABOVE it in
+    -- the same button: identical rect, zoom, desat and alpha, drawn over the
+    -- engine art. It stays BELOW the swipe and TextOverlay because those are
+    -- child FRAMES and frame level beats draw layer.
+    --
+    -- Created UNCONDITIONALLY, for every button, even when no override is
+    -- configured: initializeFrame runs at frame CREATION only and pool reuse
+    -- never re-runs it, so a texture created "only when needed" would never
+    -- reach an already-pooled button. Creation here is also the only styling
+    -- context guaranteed legal when reloading straight into an instance.
+    local iconOv = btn:CreateTexture(nil, "ARTWORK", nil, 1)
+    iconOv:SetAllPoints()
+    iconOv:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    iconOv:Hide()
+    btn._arcIconOverride = iconOv
+    btn._arcArcID = arcID
 
     -- Aura swipe: REVERSED (fresh buff bright, dark grows as it runs out).
     -- Duration display = the swipe's OWN countdown numbers (CDM parity:
@@ -173,17 +391,33 @@ local function WireAuraButton(btn)
     btn.TextOverlay = overlay
 
     local stacks = overlay:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+    -- OVERLAY sublevel 7: the active border edges live on this SAME overlay at
+    -- sublevel 6 (ApplyBorderEdges) — texts must sit one notch above or the
+    -- border strips draw over them (the "stack text behind the border" report)
+    stacks:SetDrawLayer("OVERLAY", 7)
     stacks:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -2, 2)
     btn._arcStacks = stacks
 
-    -- countdown fontstring reference for styling (the swipe owns the text)
+    -- countdown fontstring reference for styling (the swipe owns the text).
+    -- REHOME it onto TextOverlay: the FS is born on the swipe frame, a full
+    -- frame level BELOW the overlay hosting the border edges — frame level
+    -- beats draw layer, so SetDrawLayer(7) on the swipe frame still rendered
+    -- the countdown UNDER the border. Same object, the Cooldown keeps
+    -- driving its text; only the render context moves.
     if swipe.GetCountdownFontString then
-        btn._arcDurText = swipe:GetCountdownFontString()
+        local cfs = swipe:GetCountdownFontString()
+        btn._arcDurText = cfs
+        if cfs then
+            cfs:SetParent(overlay)
+            cfs:SetDrawLayer("OVERLAY", 7)
+        end
     end
 
     -- Hand the engine our widgets (inbound setters; engine drives from here)
     btn:SetIcon(icon)
-    btn:SetApplicationCount(stacks, {})
+    btn:SetApplicationCount(stacks, { formatter = GetLiveFormatter(arcID) })
+    btn._arcFmtKey = arcID
+    btn._arcFmtBoundV = liveFormatterVersion
     btn:SetDurationCooldown(swipe)
 
     -- The holder owns all mouse interaction (drag/tooltip/context menu)
@@ -197,14 +431,62 @@ AuraIcons.WireAuraButton = WireAuraButton
 -- DEF HELPERS
 -- ═══════════════════════════════════════════════════════════════════════════
 
-local function UnitsFor(def)
-    if def.unitMode == "debuff" then return { "target" } end
-    if def.unitMode == "both" then return { "player", "target" } end
-    return { "player" }   -- "buff"
+-- LANES: a def is (aura type) x (set of units). Every pair becomes its own
+-- engine slot, and EnsureSlots anchors them all to the SAME holder, so a
+-- multi-unit icon reads as one icon that lights when ANY of its units carries
+-- the aura. That OR falls out of compositing -- we never read presence.
+--
+-- BACKWARD COMPATIBILITY: existing icons store the old single `unitMode` and are
+-- translated here at runtime. Nothing is rewritten on disk and the arcID scheme
+-- is untouched, so every icon a user has already made keeps its identity,
+-- settings, group placement and behaviour.
+local LEGACY_LANES = {
+    buff        = { { unit = "player", harmful = false } },
+    debuff      = { { unit = "target", harmful = true } },
+    focusdebuff = { { unit = "focus",  harmful = true } },
+    selfdebuff  = { { unit = "player", harmful = true } },
+    pet         = { { unit = "pet",    harmful = false } },
+    -- legacy "both" is specifically buff-on-you PLUS debuff-on-target, NOT the
+    -- cartesian product, so it has to stay an explicit pair list
+    both        = { { unit = "player", harmful = false }, { unit = "target", harmful = true } },
+}
+
+-- one UI unit choice can expand to several real tokens
+local UNIT_TOKENS = {
+    player = { "player" },
+    target = { "target" },
+    focus  = { "focus" },
+    pet    = { "pet" },
+    party  = { "party1", "party2", "party3", "party4" },
+}
+local UNIT_ORDER = { "player", "target", "focus", "pet", "party" }
+
+local function LanesFor(def)
+    local units = def.units
+    if type(units) ~= "table" or not next(units) then
+        return LEGACY_LANES[def.unitMode] or LEGACY_LANES.buff
+    end
+    local t = def.auraType or "buff"
+    local lanes = {}
+    for _, choice in ipairs(UNIT_ORDER) do
+        if units[choice] then
+            for _, token in ipairs(UNIT_TOKENS[choice] or {}) do
+                if t ~= "debuff" then lanes[#lanes + 1] = { unit = token, harmful = false } end
+                if t ~= "buff"   then lanes[#lanes + 1] = { unit = token, harmful = true } end
+            end
+        end
+    end
+    if #lanes == 0 then return LEGACY_LANES.buff end
+    return lanes
 end
 
-local function FilterFor(def, unit)
-    if unit == "player" then return "HELPFUL" end
+local function FilterForLane(def, lane)
+    if not lane.harmful then
+        -- "Only mine" is the PLAYER token: auras cast by you, your pet or your
+        -- vehicle. It is NOT behind the identity gate, so it still narrows lanes
+        -- where a spell ID cannot (notably debuffs on yourself).
+        return def.ownOnly and "HELPFUL|PLAYER" or "HELPFUL"
+    end
     return def.ownOnly and "HARMFUL|PLAYER" or "HARMFUL"
 end
 
@@ -249,7 +531,12 @@ end
 local function ApplySlotFilters(entry, parked)
     local def = entry.def
     for _, sub in ipairs(entry.subs) do
-        local filters = parked and { includeSpellIDs = {} }
+        -- PARK = the never-matching id, NEVER the empty table (ONE convention,
+        -- the BD pattern the rewire already uses): an empty set is the
+        -- permissive fallback if the engine ever reverts toward creation-time
+        -- filters — a filterless HELPFUL slot displays an ARBITRARY buff (the
+        -- Bonegrinder icon showing a permanent rep bonus).
+        local filters = parked and { includeSpellIDs = { [0] = true } }
             or { includeSpellIDs = IncludeMap(def) }
         sub.container:SetAuraSlotCandidateFilters(sub.key, filters)
     end
@@ -265,17 +552,67 @@ local function SetSlotsParked(entry, parked)
     ApplySlotFilters(entry, parked)
 end
 
+-- FILTER TRUTH RE-ASSERTION (the Bonegrinder wrong-aura report): a slot that
+-- loses its candidate filter shows an ARBITRARY buff — a permanently-active
+-- rep bonus always wins a filterless HELPFUL slot. Our writers only fire on
+-- STATE TRANSITIONS, so a filter dropped engine-side (mid-session container
+-- churn) was never re-pushed. SetAuraSlotCandidateFilters is a data-only
+-- write (legal in any context, engine rescans internally): re-push every
+-- entry's correct set at the settle edges. A handful of table writes per
+-- event, zero idle cost.
+function AuraIcons.ReassertFilters()
+    if not IS_121 then return end
+    for _, entry in pairs(entries) do
+        if entry.subs and #entry.subs > 0 and combatQueue[entry] == nil then
+            ApplySlotFilters(entry, entry.parked)
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- CONTAINER REPAIR (12.1 engine bug -- see ns.CDMShared for the full write-up)
+-- Filters fail OPEN whenever UnitCanAssist fails: vehicles, cinematics, faction
+-- change, range, encounter end. Re-pushing the filter is not always enough when
+-- the CONTAINER itself stops listening, so cycle SetEnabled off/on first (the
+-- setter is guarded on change, so only a false->true cycle re-registers events
+-- and refreshes) and then re-assert every slot's believed-correct filter.
+-- Both operations are data-only, so this works IN COMBAT -- which is the point,
+-- since the entomb case happens mid-pull.
+-- ═══════════════════════════════════════════════════════════════════════════
+function AuraIcons.RepairContainers()
+    if not IS_121 then return end
+    local Sh = ns.CDMShared
+    if Sh and Sh.RepairAuraContainer then
+        for _, rec in ipairs(allContainers) do
+            Sh.RepairAuraContainer(rec.frame)
+        end
+    end
+    -- Re-push filters last: SetAuraSlotCandidateFilters ends with UpdateAllAuras,
+    -- so this both restores the data and forces the rescan.
+    AuraIcons.ReassertFilters()
+end
+
+if ns.CDMShared and ns.CDMShared.RegisterAuraContainerRepair then
+    ns.CDMShared.RegisterAuraContainerRepair(AuraIcons.RepairContainers)
+end
+
 local regenWatcher = CreateFrame("Frame")
 regenWatcher:RegisterEvent("PLAYER_REGEN_ENABLED")
-regenWatcher:SetScript("OnEvent", function()
-    for entry, parked in pairs(combatQueue) do
-        ApplySlotFilters(entry, parked)
+regenWatcher:RegisterEvent("PLAYER_ENTERING_WORLD")
+regenWatcher:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+regenWatcher:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_REGEN_ENABLED" then
+        for entry, parked in pairs(combatQueue) do
+            ApplySlotFilters(entry, parked)
+        end
+        wipe(combatQueue)
+        if pendingRefresh then
+            pendingRefresh = false
+            AuraIcons.RefreshVisibility()
+        end
     end
-    wipe(combatQueue)
-    if pendingRefresh then
-        pendingRefresh = false
-        AuraIcons.RefreshVisibility()
-    end
+    -- every settle edge (regen included): re-assert believed-correct filters
+    AuraIcons.ReassertFilters()
 end)
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -304,20 +641,27 @@ local function EnsureSlots(arcID, def, startParked)
     entry.parked = startParked and true or false
     entries[arcID] = entry
 
-    for _, unit in ipairs(UnitsFor(def)) do
+    for _, lane in ipairs(LanesFor(def)) do
+        local unit = lane.unit
         local c = CreateIconContainer(unit)
         if c then
-            local key = arcID .. "_" .. unit
-            local sub = { unit = unit, key = key, container = c }
+            -- generation suffix: slots can never be unregistered, so a REWIRE
+            -- (settings that live in create-time bindings, e.g. the stack
+            -- formatter) parks the old keys and adds fresh ones.
+            -- The lane kind is part of the key too: one unit can now carry BOTH
+            -- a helpful and a harmful lane, and they must not collide.
+            local key = arcID .. "_" .. unit .. (lane.harmful and "_h" or "_b")
+                .. "_g" .. (entry.gen or 0)
+            local sub = { unit = unit, key = key, container = c, harmful = lane.harmful }
             table.insert(entry.subs, sub)
             -- ALL button setup lives in initializeFrame: the engine
             -- RE-CREATES slot buttons over the aura's life and re-runs this
             -- (MSUF-verified) — a one-time anchor after AddAuraSlot returns
             -- strands later buttons at the container's corner.
-            local btn = c:AddAuraSlot(key, FilterFor(def, unit), {
+            local btn = c:AddAuraSlot(key, FilterForLane(def, lane), {
                 maxFrameCount = 1,
                 initializeFrame = function(b)
-                    WireAuraButton(b)
+                    WireAuraButton(b, arcID)
                     sub.frame = b
                     -- bake the icon's CONFIGURED zoom into art + swipe here:
                     -- initializeFrame is always a legal context and re-runs
@@ -344,15 +688,21 @@ local function EnsureSlots(arcID, def, startParked)
                         -- FULL LADDER (holder = h): ghost regions h, missing
                         -- glow host h+1 (a DECISIVE level above the ghost —
                         -- equal-level ties are family-dependent: pixel won,
-                        -- ants/proc lost), button h+2, swipe h+3, overlay
-                        -- h+4, glow anchor h+5, border overlay h+6, stack
-                        -- text h+10. CHILDREN DO NOT FOLLOW a parent
-                        -- SetFrameLevel — re-level the swipe/text overlay
-                        -- explicitly or they keep container-high levels and
-                        -- bury the ArcUI border. Swipe ABOVE the button
-                        -- (equal level loses the draw order against the icon
-                        -- region = invisible swipe).
-                        local lvl = h:GetFrameLevel() + 2
+                        -- ants/proc lost), GHOST BORDER overlay h+2 — BELOW
+                        -- the button: the live button OCCLUDES the ghost
+                        -- chrome while the aura is up (we can never READ the
+                        -- button's secret shown state, so stacking order IS
+                        -- the state logic; the old h+6 put this chrome above
+                        -- the texts = the "text behind the border" bug) —
+                        -- button h+3, swipe h+4, text overlay h+5 (active
+                        -- border sublevel 6, texts sublevel 7), glow anchor
+                        -- h+8, count container h+10. CHILDREN DO NOT FOLLOW
+                        -- a parent SetFrameLevel — re-level the swipe/text
+                        -- overlay explicitly or they keep container-high
+                        -- levels. Swipe ABOVE the button (equal level loses
+                        -- the draw order against the icon region = invisible
+                        -- swipe).
+                        local lvl = h:GetFrameLevel() + 3
                         b:SetFrameStrata(h:GetFrameStrata())
                         b:SetFrameLevel(lvl)
                         if b._arcSwipe then b._arcSwipe:SetFrameLevel(lvl + 1) end
@@ -369,7 +719,9 @@ local function EnsureSlots(arcID, def, startParked)
                     AuraIcons.ApplySettings(arcID, b)
                     C_Timer.After(0, function() AuraIcons.ApplySettings(arcID) end)
                 end,
-                candidateFilters = { includeSpellIDs = startParked and {} or IncludeMap(def) },
+                -- parked creation uses the never-matching id too — never bake
+                -- the permissive empty set into the slot's creation state
+                candidateFilters = { includeSpellIDs = startParked and { [0] = true } or IncludeMap(def) },
             })
             if btn and not sub.frame then sub.frame = btn end
         end
@@ -510,6 +862,16 @@ end
 -- options, whose semantics mirror ns.CooldownFormatter:
 --   decimals == 1  -> one decimal below decimalThreshold (<=0 = everywhere)
 --   abbrevThreshold > 0 -> M:SS below that threshold (legacy strings mapped)
+-- CN-client crash shield: a CN 12.1 build ships a native INTEGER division in
+-- the aura countdown-text engine that hard-crashes the whole client
+-- (INT_DIVIDE_BY_ZERO in Wow.exe) when bound countdown text refreshes. The
+-- ONE fractional value ArcUI ever hands that engine is the decimals band's
+-- 0.1 step below — integer-truncated that is 0. Until Blizzard fixes the CN
+-- client, CN renders aura-icon decimals as whole seconds instead of risking
+-- the crash. No effect on any other region.
+local IS_CN_CLIENT = (GetCurrentRegion and GetCurrentRegion() == 5)
+    or (GetCVar and GetCVar("portal") == "CN")
+
 local function BuildBoundTextFormatter(ct)
     if not (C_StringUtil and C_StringUtil.CreateNumericRuleFormatter
             and Enum.NumericRuleFormatRounding) then
@@ -521,7 +883,7 @@ local function BuildBoundTextFormatter(ct)
     local bps = {}
     -- seconds band (0-60): countdown parity = ceil to whole seconds
     local decT = 0
-    if ct.decimals == 1 then
+    if ct.decimals == 1 and not IS_CN_CLIENT then
         local v = ct.decimalThreshold
         decT = (type(v) == "number" and v > 0) and math.min(v, 60) or 60
     end
@@ -580,12 +942,39 @@ function AuraIcons.StyleActiveButton(btn, settings, sizeRef)
     local activeDesat = rs.desaturate
     if activeDesat == nil then activeDesat = sv and sv.readyDesaturate end
 
-    btn:SetAlpha(activeAlpha)
+    -- Show Icon off (forceHideIcon): CDM parity — art/swipe/border/glows all
+    -- hide, ONLY duration + stack text survive (at full alpha).
+    -- Preserve Duration Text: the icon/swipe dim to Active Alpha while the
+    -- texts float at full opacity (SetIgnoreParentAlpha, same mechanism as
+    -- CooldownState's PreserveDurationText on CDM icons).
+    local forceHide = settings and settings.forceHideIcon == true
+    local floatTexts = forceHide or rs.preserveDurationText == true
+
+    btn:SetAlpha(forceHide and 1 or activeAlpha)
+    if btn._arcPlate then btn._arcPlate:SetShown(not forceHide) end
+    local zoom = (settings and settings.zoom) or 0.08
     if btn._arcIcon then
+        btn._arcIcon:SetShown(not forceHide)
         btn._arcIcon:SetDesaturated(activeDesat and true or false)
         -- icon zoom parity with the Arc pipeline
-        local z = (settings and settings.zoom) or 0.08
-        btn._arcIcon:SetTexCoord(z, 1 - z, z, 1 - z)
+        btn._arcIcon:SetTexCoord(zoom, 1 - zoom, zoom, 1 - zoom)
+    end
+
+    -- CUSTOM ICON: the user's art, one sublevel above the engine-fed icon.
+    -- Mirrors the base icon's zoom/desat/visibility so the override reads as
+    -- the SAME icon, not a sticker on top of it. Hidden when no override is
+    -- configured, which is also how a cleared override restores engine art.
+    if btn._arcIconOverride then
+        local ovTex = ArcAuras and ArcAuras.GetIconOverride
+            and ArcAuras.GetIconOverride(btn._arcArcID) or nil
+        if ovTex and not forceHide then
+            btn._arcIconOverride:SetTexture(ovTex)
+            btn._arcIconOverride:SetTexCoord(zoom, 1 - zoom, zoom, 1 - zoom)
+            btn._arcIconOverride:SetDesaturated(activeDesat and true or false)
+            btn._arcIconOverride:Show()
+        else
+            btn._arcIconOverride:Hide()
+        end
     end
 
     -- ── the "cooldown frame solution" (Arc's call): the button's
@@ -597,8 +986,8 @@ function AuraIcons.StyleActiveButton(btn, settings, sizeRef)
     local sw = btn._arcSwipe
     if sw then
         local swipe = (settings and settings.cooldownSwipe) or {}
-        sw:SetDrawSwipe(swipe.showSwipe ~= false)
-        sw:SetDrawEdge(swipe.showEdge == true)      -- aura default: no edge
+        sw:SetDrawSwipe(not forceHide and swipe.showSwipe ~= false)
+        sw:SetDrawEdge(not forceHide and swipe.showEdge == true)  -- aura default: no edge
         sw:SetReverse(swipe.reverse ~= false)       -- aura default: reversed
         local sc = swipe.swipeColor
         if sc then
@@ -662,6 +1051,8 @@ function AuraIcons.StyleActiveButton(btn, settings, sizeRef)
         local bdt = btn._arcBoundDurText
         if not bdt then
             bdt = btn.TextOverlay:CreateFontString(nil, "OVERLAY", "GameFontHighlightMedium")
+            -- above the border edges (sublevel 6) — see _arcStacks
+            bdt:SetDrawLayer("OVERLAY", 7)
             btn._arcBoundDurText = bdt
         end
         -- CustomAuraButtonDurationTextOptions (69111, doc-verified)
@@ -736,14 +1127,21 @@ function AuraIcons.StyleActiveButton(btn, settings, sizeRef)
             local a = ct.anchor or "CENTER"
             dt:SetPoint(a, btn, a, ct.offsetX or 0, ct.offsetY or 0)
         end
+        -- Preserve Duration Text / Show Icon off: the text ignores the
+        -- button's dimmed alpha and renders at full strength
+        if dt.SetIgnoreParentAlpha then
+            dt:SetIgnoreParentAlpha(floatTexts)
+            if floatTexts then dt:SetAlpha(1) end
+        end
     end
 
     -- BORDER ON THE BUTTON ITSELF (EQOL pattern): edges live on
     -- the button's TextOverlay — they show/hide WITH the aura
     -- and always draw above the swipe. Same shared painter as
-    -- the ghost border = pixel-identical geometry.
+    -- the ghost border = pixel-identical geometry. Hidden with
+    -- the rest of the art when Show Icon is off.
     ApplyBorderEdges(btn.TextOverlay or btn, btn, "_arcBtnBorder",
-        settings and settings.border, 1)
+        (not forceHide) and settings and settings.border or nil, 1)
 
     local cht = (settings and settings.chargeText) or {}
     local st = btn._arcStacks
@@ -774,6 +1172,11 @@ function AuraIcons.StyleActiveButton(btn, settings, sizeRef)
             local a = cht.anchor or cht.position or "BOTTOMRIGHT"
             st:SetPoint(a, btn, a, cht.offsetX or -2, cht.offsetY or 2)
         end
+        -- CDM parity: preserve floats the stack text alongside the duration
+        if st.SetIgnoreParentAlpha then
+            st:SetIgnoreParentAlpha(floatTexts)
+            if floatTexts then st:SetAlpha(1) end
+        end
         if cht.enabled == false then st:Hide() else st:Show() end
     end
 
@@ -791,7 +1194,7 @@ function AuraIcons.StyleActiveButton(btn, settings, sizeRef)
         for li = 1, 3 do
             local fsKey = "_arcCL" .. li
             local fs = overlayF[fsKey]
-            if LabelWanted(cl, li) then
+            if LabelWanted(cl, li) and not forceHide then
                 if not fs then
                     fs = overlayF:CreateFontString(nil, "OVERLAY")
                     overlayF[fsKey] = fs
@@ -831,6 +1234,12 @@ function AuraIcons.ApplySettings(arcID, legalBtn)
 
     -- ── AURA MISSING -> holder ghost ────────────────────────────────────
     local holder = entry.holder
+    -- Show Icon off: the AURA-ICON force-hide is owned HERE, not by
+    -- CDMEnhance's whole-frame alpha-0 path (that would also kill the
+    -- engine-button texts this option promises to keep) — ghost art, ghost
+    -- border and the missing glow all hide; StyleActiveButton hides the
+    -- active art and keeps the texts.
+    local forceHide = settings and settings.forceHideIcon == true
     local missAlpha = cs.alpha
     if missAlpha == nil then missAlpha = sv and sv.cooldownAlpha end
     if missAlpha == nil then missAlpha = 0.55 end   -- ghost default
@@ -838,6 +1247,18 @@ function AuraIcons.ApplySettings(arcID, legalBtn)
     if missAlpha <= 0 and ns.CDMEnhance and ns.CDMEnhance.IsOptionsPanelOpen
        and ns.CDMEnhance.IsOptionsPanelOpen() then
         missAlpha = 0.35
+    end
+    -- Show Icon off: hidden in real play, but while the OPTIONS PANEL is
+    -- open (and out of combat) the ghost surfaces at the preview opacity so
+    -- the icon stays findable/editable — same look as the Inactive Alpha 0
+    -- preview. Combat edges re-run this (SweepForceHideCombat below).
+    if forceHide then
+        missAlpha = 0
+        if ns.CDMEnhance and ns.CDMEnhance.IsOptionsPanelOpen
+           and ns.CDMEnhance.IsOptionsPanelOpen()
+           and not InCombatLockdown() then
+            missAlpha = 0.35
+        end
     end
     -- NORMALIZE the holder FRAME alpha to full: earlier builds wrote the
     -- missing alpha here and it STICKS (nothing else resets it), leaving the
@@ -856,6 +1277,14 @@ function AuraIcons.ApplySettings(arcID, legalBtn)
     local bcfg = settings and settings.border
     local ghostHost = holder._arcBorderOverlay or holder
     ApplyBorderEdges(ghostHost, holder, "_arcAuraGhostBorder", bcfg, missAlpha)
+    -- CDMEnhance's holder edges are now EXEMPTED at the source: UpdateIconBorder
+    -- returns early on _arcIsAuraIcon, because AuraIcons owns aura-holder
+    -- borders (the ghost edges above plus the button edges). This zeroing stays
+    -- as a belt for edges created before that exemption, and for any path that
+    -- creates them without going through UpdateIconBorder. It is NOT the
+    -- mechanism any more: it used to be, and it lost the race every time a
+    -- restyle ran after ApplySettings, leaving a bare border floating with
+    -- Aura Missing alpha at 0 (surfaced on group joins and zone changes).
     if holder._arcBorderEdges then
         for _, edgeTex in pairs(holder._arcBorderEdges) do
             if edgeTex.SetAlpha then edgeTex:SetAlpha(0) end
@@ -864,12 +1293,17 @@ function AuraIcons.ApplySettings(arcID, legalBtn)
 
     -- Re-assert the holder's overlay level ladder from its CURRENT level:
     -- those children got their levels at factory time (base level 10) and
-    -- do NOT follow when CDMGroups later raises the holder — leaving the
-    -- border overlay BELOW our level-synced button (border vanishes exactly
-    -- when the aura is active).
+    -- do NOT follow when CDMGroups later raises the holder. GHOST BORDER
+    -- overlay goes at h+2, BELOW the button (h+3): the live button OCCLUDES
+    -- the ghost chrome while the aura is up — the active border on the
+    -- button's TextOverlay is the visible border then — and when the button
+    -- hides (aura missing) the ghost chrome surfaces. The old h+6 drew this
+    -- chrome over the button's texts at every state ("text behind the
+    -- border"). Occlusion IS the state logic: the button's shown state is a
+    -- secret we can never read.
     local hl = holder:GetFrameLevel()
-    if holder._arcBorderOverlay then holder._arcBorderOverlay:SetFrameLevel(hl + 6) end
-    if holder._arcGlowAnchor then holder._arcGlowAnchor:SetFrameLevel(hl + 5) end
+    if holder._arcBorderOverlay then holder._arcBorderOverlay:SetFrameLevel(hl + 2) end
+    if holder._arcGlowAnchor then holder._arcGlowAnchor:SetFrameLevel(hl + 8) end
     if holder._arcCountContainer then holder._arcCountContainer:SetFrameLevel(hl + 10) end
 
     local missDesat = cs.desaturate
@@ -916,7 +1350,7 @@ function AuraIcons.ApplySettings(arcID, legalBtn)
     do
         local aa = settings and settings.auraActiveState or {}
         local host = holder._arcMissGlowHost
-        if aa.glowWhenMissing == true and ns.Glows then
+        if aa.glowWhenMissing == true and not forceHide and ns.Glows then
             if not host then
                 host = CreateFrame("Frame", nil, holder)
                 host:SetAllPoints(holder)
@@ -971,6 +1405,64 @@ function AuraIcons.ApplySettings(arcID, legalBtn)
         end
     end
 
+    -- ACTIVE-GLOW PREVIEW (options panel): the real Glow When Active lives on
+    -- the ENGINE BUTTON and only renders while the aura is up — for tuning,
+    -- the Preview toggle renders the same recipe on the holder ghost via
+    -- ns.Glows (the button packs are LCG ports, so the preview matches the
+    -- live look). Stops with the toggle, the panel, or the glow setting.
+    do
+        local host = holder._arcActGlowPrevHost
+        local previewOn = rs.glow == true and not forceHide
+            and ns.CDMEnhanceOptions and ns.CDMEnhanceOptions.IsGlowPreviewActive
+            and ns.CDMEnhanceOptions.IsGlowPreviewActive(arcID)
+            and ns.CDMEnhance and ns.CDMEnhance.IsOptionsPanelOpen
+            and ns.CDMEnhance.IsOptionsPanelOpen()
+        if previewOn and ns.Glows then
+            if not host then
+                host = CreateFrame("Frame", nil, holder)
+                host:SetAllPoints(holder)
+                holder._arcActGlowPrevHost = host
+            end
+            host:SetFrameLevel(holder:GetFrameLevel() + 7)
+            local gtype = rs.glowType or "pixel"
+            local gc = rs.glowColor
+            local r = gc and gc.r or 1
+            local g = gc and gc.g or 0.85
+            local b = gc and gc.b or 0.1
+            local strata = rs.glowFrameStrata
+            if strata == "inherit" or strata == "" then strata = nil end
+            local sig = table.concat({ gtype, r, g, b,
+                rs.glowIntensity or 1, rs.glowScale or 1, rs.glowSpeed or 0.25,
+                rs.glowLines or 8, rs.glowThickness or 3,
+                rs.glowLength or 0,
+                rs.glowXOffset or 0, rs.glowYOffset or 0,
+                strata or "-", rs.glowFrameLevel or 0,
+                holder:GetFrameLevel() }, ":")
+            if host._arcActGlowPrevSig ~= sig then
+                host._arcActGlowPrevSig = sig
+                ns.Glows.Stop(host, "ArcUI_AuraActGlowPreview")
+                ns.Glows.Start(host, "ArcUI_AuraActGlowPreview", gtype, {
+                    color      = { r, g, b, rs.glowIntensity or 1 },
+                    intensity  = rs.glowIntensity or 1,
+                    scale      = rs.glowScale or 1,
+                    frequency  = rs.glowSpeed or 0.25,
+                    lines      = rs.glowLines or 8,
+                    thickness  = rs.glowThickness or 3,
+                    length     = rs.glowLength,   -- nil/0 = LCG auto
+                    xOffset    = rs.glowXOffset or 0,
+                    yOffset    = rs.glowYOffset or 0,
+                    strata     = strata,
+                    frameLevel = rs.glowFrameLevel or 0,
+                })
+            end
+            host:Show()
+        elseif host then
+            ns.Glows.Stop(host, "ArcUI_AuraActGlowPreview")
+            host._arcActGlowPrevSig = nil
+            host:Hide()
+        end
+    end
+
     -- ── AURA ACTIVE -> engine buttons ───────────────────────────────────
     -- Buttons are FORBIDDEN whenever auras are secret — a WIDER state than
     -- combat (lab finding: aura-data secrecy and button-forbidden are
@@ -997,11 +1489,12 @@ function AuraIcons.ApplySettings(arcID, legalBtn)
                 btn:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, 0)
                 btn:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", 0, 0)
                 -- re-sync draw order (holder levels move with group ops):
-                -- ghost h, miss-glow host h+1, button h+2, swipe h+3
-                -- (ABOVE the button — equal level buries it under the icon
-                -- region), text overlay h+4, then glow anchor h+5 / border
-                -- h+6 / stack text h+10
-                local lvl = holder:GetFrameLevel() + 2
+                -- ghost h, miss-glow host h+1, ghost border overlay h+2
+                -- (occluded by the button while the aura is up), button h+3,
+                -- swipe h+4 (ABOVE the button — equal level buries it under
+                -- the icon region), text overlay h+5, then glow anchor h+8 /
+                -- count container h+10 — mirror of the creation ladder
+                local lvl = holder:GetFrameLevel() + 3
                 btn:SetFrameStrata(holder:GetFrameStrata())
                 btn:SetFrameLevel(lvl)
                 if btn._arcSwipe then btn._arcSwipe:SetFrameLevel(lvl + 1) end
@@ -1011,6 +1504,15 @@ function AuraIcons.ApplySettings(arcID, legalBtn)
                 -- now lives in StyleActiveButton — ONE path shared with the
                 -- Aura Group engine buttons, so the presentations cannot drift
                 StyleActiveButton(btn, settings, holder)
+
+                -- STACK FORMATTER re-bind: belt-and-suspenders against the
+                -- engine copying the formatter object at bind time (the live
+                -- registry's breakpoint refresh covers the reference case).
+                -- Version-gated so it costs nothing when nothing changed.
+                if btn._arcStacks and btn._arcFmtBoundV ~= liveFormatterVersion then
+                    btn._arcFmtBoundV = liveFormatterVersion
+                    btn:SetApplicationCount(btn._arcStacks, { formatter = GetLiveFormatter(arcID) })
+                end
             end
         end
     end
@@ -1027,6 +1529,28 @@ local function SweepMissGlowCombat(inCombat)
     end
 end
 
+-- Show Icon off + options panel open: the editing preview must never show in
+-- combat — drop the ghost at combat start, restore the preview at combat end.
+-- Holder-side writes only (always legal); button work inside ApplySettings
+-- self-gates on accessibility.
+local function SweepForceHideCombat(inCombat)
+    if not (ns.CDMEnhance and ns.CDMEnhance.IsOptionsPanelOpen
+        and ns.CDMEnhance.IsOptionsPanelOpen()) then return end
+    for arcID, entry in pairs(entries) do
+        local holder = entry.holder
+        if holder and holder.Icon then
+            local s = ArcAuras.GetCachedSettings and ArcAuras.GetCachedSettings(arcID)
+            if s and s.forceHideIcon == true then
+                if inCombat then
+                    holder.Icon:SetAlpha(0)
+                else
+                    AuraIcons.ApplySettings(arcID)
+                end
+            end
+        end
+    end
+end
+
 -- deferred button writes: retry at combat end (snapshot first — a still-
 -- forbidden button re-queues itself during the retry)
 local applyRegen = CreateFrame("Frame")
@@ -1035,9 +1559,11 @@ applyRegen:RegisterEvent("PLAYER_REGEN_DISABLED")
 applyRegen:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_REGEN_DISABLED" then
         SweepMissGlowCombat(true)
+        SweepForceHideCombat(true)
         return
     end
     SweepMissGlowCombat(false)
+    SweepForceHideCombat(false)
     local q = {}
     for arcID in pairs(pendingApply) do q[#q + 1] = arcID end
     wipe(pendingApply)
@@ -1134,8 +1660,11 @@ function AuraIcons.Create(defIn)
     local db = GetDB()
     if not db then return nil end
 
-    local arcID = AuraIcons.MakeID(spellID)
-    if db.auraIcons[arcID] then return arcID end   -- already tracked
+    -- Copies are allowed: same aura, several icons (one per unit, different
+    -- looks, one in a group and one free). Callers that must NOT duplicate --
+    -- the preset installer and the CDM bulk import -- check FindBySpellID
+    -- first, so the "don't add this twice" rule lives with them, not here.
+    local arcID = NextFreeAuraID(db, spellID)
 
     local info = C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(spellID)
     local def = {
@@ -1145,7 +1674,12 @@ function AuraIcons.Create(defIn)
         -- icon) read better as "Bloodlust / Heroism" than as the primary ID's name
         name     = defIn.name or (info and info.name) or ("Aura " .. spellID),
         icon     = (info and (info.iconID or info.originalIconID)) or 134400,
+        -- unitMode is kept for icons made before the type/units split (and as the
+        -- fallback LanesFor reads when `units` is absent); auraType + units are
+        -- the current shape
         unitMode = defIn.unitMode or "buff",
+        auraType = defIn.auraType,
+        units    = defIn.units,
         ownOnly  = defIn.ownOnly and true or false,
     }
     db.auraIcons[arcID] = def
@@ -1213,51 +1747,17 @@ function AuraIcons.Delete(arcID)
     print("|cff00CCFF[Arc Auras]|r Removed aura icon: " .. name)
 end
 
--- Icon override: same contract as the cooldown-icon version (spell OR item
--- source ID; 0/nil resets).
+-- Icon override: public entry point kept for existing callers; the
+-- implementation is the shared writer in ArcUI_ArcAuras.lua (see the ONE PATH
+-- block there). It writes db.auraIcons and then repaints BOTH surfaces: the
+-- holder ghost directly, and the engine-driven active button through
+-- AuraIcons.ApplySettings. This copy only ever repainted the ghost, so the
+-- live aura kept showing its real icon.
 function AuraIcons.ApplyIconOverride(arcID, overrideID)
-    local db = GetDB()
-    local def = db and db.auraIcons[arcID]
-    if not def then return end
-
-    if not overrideID or overrideID <= 0 then
-        def.iconOverride, def.iconOverrideID = nil, nil
-        local info = C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(def.spellID)
-        def.icon = (info and (info.iconID or info.originalIconID)) or def.icon
-        local entry = entries[arcID]
-        if entry and entry.holder and entry.holder.Icon then
-            entry.holder.Icon:SetTexture(def.icon or 134400)
-        end
-        print("|cff00CCFF[Arc Auras]|r Icon reset to default for " .. (def.name or arcID))
-        return
+    if ArcAuras and ArcAuras.SetIconOverride then
+        return ArcAuras.SetIconOverride(arcID, overrideID)
     end
-
-    local newIcon, sourceName
-    local spellInfo = C_Spell.GetSpellInfo(overrideID)
-    if spellInfo and (spellInfo.iconID or spellInfo.originalIconID) then
-        newIcon = spellInfo.iconID or spellInfo.originalIconID
-        sourceName = spellInfo.name
-    end
-    if not newIcon and C_Item and C_Item.GetItemIconByID then
-        local itemIcon = C_Item.GetItemIconByID(overrideID)
-        if itemIcon then
-            newIcon = itemIcon
-            sourceName = (C_Item.GetItemNameByID and C_Item.GetItemNameByID(overrideID)) or ("Item " .. overrideID)
-        end
-    end
-    if not newIcon then
-        print("|cff00CCFF[Arc Auras]|r Could not find icon for ID " .. overrideID)
-        return
-    end
-
-    def.iconOverride = newIcon
-    def.iconOverrideID = overrideID
-    local entry = entries[arcID]
-    if entry and entry.holder and entry.holder.Icon then
-        entry.holder.Icon:SetTexture(newIcon)
-    end
-    print(string.format("|cff00CCFF[Arc Auras]|r Icon changed to %s (%d) for %s",
-        sourceName or "?", overrideID, def.name or arcID))
+    return false
 end
 
 -- Re-evaluate spec/talent visibility for every tracked aura icon. The direct
@@ -1311,6 +1811,95 @@ function AuraIcons.RefreshAll()
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
+-- REWIRE: recreate every icon's slots so CREATE-TIME bindings pick up changed
+-- settings NOW. The engine pre-creates each slot's button once and reuses it
+-- forever (maxFrameCount contract) — so the stack formatter, baked in
+-- initializeFrame, would otherwise only refresh on a reload. Old slots can't
+-- be unregistered: park them on a never-matching filter (the BD pattern) and
+-- add fresh generation-suffixed slots. Desk-time only — slot creation is
+-- blocked under aura secrecy; callers are options setters, so that is always
+-- satisfied outside combat/instances.
+-- ═══════════════════════════════════════════════════════════════════════════
+local rewirePending = false
+local rewireFlush = CreateFrame("Frame")
+rewireFlush:RegisterEvent("PLAYER_REGEN_ENABLED")
+rewireFlush:RegisterEvent("PLAYER_ENTERING_WORLD")
+rewireFlush:SetScript("OnEvent", function()
+    if rewirePending and not AurasSecretNow() then
+        rewirePending = false
+        AuraIcons.RewireAll()
+    end
+end)
+
+function AuraIcons.RewireAll()
+    if not IS_121 then return end
+    if AurasSecretNow() then
+        -- Slot creation is illegal under aura secrecy (combat/instances). A
+        -- silent skip left toggles flipped MID-COMBAT dead until a reload (the
+        -- Maelstrom show-at-1 report) — queue instead and flush on regen/zone.
+        rewirePending = true
+        return
+    end
+    local touched = {}
+    for arcID, entry in pairs(entries) do
+        if entry.subs and #entry.subs > 0 then
+            for _, sub in ipairs(entry.subs) do
+                if sub.container and sub.key and sub.container.SetAuraSlotCandidateFilters then
+                    sub.container:SetAuraSlotCandidateFilters(sub.key, { includeSpellIDs = { [0] = true } })
+                    touched[sub.container] = true
+                end
+            end
+            wipe(entry.subs)
+            entry.gen = (entry.gen or 0) + 1
+            EnsureSlots(arcID, entry.def, entry.parked)
+            for _, sub in ipairs(entry.subs) do
+                if sub.container then touched[sub.container] = true end
+            end
+        end
+    end
+    for c in pairs(touched) do
+        if c.UpdateAllAuras then c:UpdateAllAuras() end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- AUTHORITATIVE STACK SETTLE: re-derive the live formatters from CURRENT
+-- settings and re-bind accessible buttons. Called debounced from
+-- ns.CDMEnhance.RequestStackSettle — the InvalidateCache chokepoint every
+-- settings-restore path funnels through (options setters, profile loads,
+-- spec changes, imports, shared-profile sync) — and directly at login/zone.
+--
+-- STACK TEXT ONLY — deliberately NOT the full ApplySettings: this runs at
+-- PLAYER_ENTERING_WORLD, when ArcAuras.GetCachedSettings can transiently
+-- serve nil (loading-screen read cached for the TTL window), and a full
+-- re-style painted DEFAULT visuals over per-icon customizations (zone-switch
+-- ghost-desaturate regression). Buttons still forbidden here (in-instance)
+-- pick the binding up at the next accessible settle; the live formatter's
+-- breakpoint refresh already covers rule changes on the existing binding.
+-- ═══════════════════════════════════════════════════════════════════════════
+function AuraIcons.StackSettle()
+    if not IS_121 then return end
+    AuraIcons.RefreshLiveFormatters()
+    for arcID, entry in pairs(entries) do
+        for _, sub in ipairs(entry.subs or {}) do
+            local btn = sub.frame
+            if btn and btn._arcStacks and btn._arcFmtBoundV ~= liveFormatterVersion then
+                local ok
+                if btn.CanBeAccessedInContext then
+                    ok = btn:CanBeAccessedInContext()
+                else
+                    ok = not (btn.IsForbidden and btn:IsForbidden())
+                end
+                if ok then
+                    btn._arcFmtBoundV = liveFormatterVersion
+                    btn:SetApplicationCount(btn._arcStacks, { formatter = GetLiveFormatter(arcID) })
+                end
+            end
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
 -- CDM IMPORT (the lab's "Import CDM buffs" button): one Arc aura icon per
 -- Tracked Buff enabled in the Cooldown Manager. Uses the C_CooldownViewer
 -- DATA PROVIDER only (no viewer object methods = no taint surface).
@@ -1341,6 +1930,68 @@ local function GetDisplayedTrackedBuffIDs()
     end
     if count == 0 then return nil end
     return set
+end
+
+-- Ordered catalog of every tracked buff/bar CDM knows for the CURRENT spec, for
+-- the Add Arc Icon picker grid. Deliberately includes entries CDM is not
+-- currently DISPLAYING (flagged shown = false): the database has them and users
+-- want to reach them without first turning them on in the Cooldown Manager.
+-- Already-tracked entries are flagged rather than dropped, so the grid can grey
+-- them the way the Pings catalog greys unbound spells.
+function AuraIcons.GetCDMCatalog()
+    local out = {}
+    if not IS_121 then return out end
+    if not (C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCategorySet
+            and C_CooldownViewer.GetCooldownViewerCooldownInfo) then return out end
+    local cat = Enum.CooldownViewerCategory
+    if not (cat and cat.TrackedBuff) then return out end
+
+    local displayedSet = GetDisplayedTrackedBuffIDs()
+    local db = GetDB()
+    local tracked = {}
+    for _, def in pairs(db and db.auraIcons or {}) do
+        tracked[def.spellID] = true
+        for id in pairs(def.spellIDs or {}) do tracked[id] = true end
+    end
+
+    local seen = {}
+    local categories = { cat.TrackedBuff }
+    if cat.TrackedBar then table.insert(categories, cat.TrackedBar) end
+    for _, catID in ipairs(categories) do
+        for _, cooldownID in ipairs(C_CooldownViewer.GetCooldownViewerCategorySet(catID) or {}) do
+            if not (issecretvalue and issecretvalue(cooldownID)) then
+                local info = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
+                local spellID = info and info.spellID
+                if spellID and not (issecretvalue and issecretvalue(spellID))
+                   and info.isKnown ~= false and not seen[spellID] then
+                    seen[spellID] = true
+                    local includeMap = { [spellID] = true }
+                    if type(info.overrideSpellID) == "number" then includeMap[info.overrideSpellID] = true end
+                    if type(info.overrideTooltipSpellID) == "number" then includeMap[info.overrideTooltipSpellID] = true end
+                    if type(info.linkedSpellIDs) == "table" then
+                        for _, linked in ipairs(info.linkedSpellIDs) do
+                            if type(linked) == "number" then includeMap[linked] = true end
+                        end
+                    end
+                    local si = C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(spellID)
+                    out[#out + 1] = {
+                        spellID  = spellID,
+                        spellIDs = includeMap,
+                        name     = (si and si.name) or ("Aura " .. spellID),
+                        icon     = (si and (si.iconID or si.originalIconID)) or 134400,
+                        shown    = (displayedSet == nil) or (displayedSet[cooldownID] and true or false),
+                        tracked  = tracked[spellID] and true or false,
+                    }
+                end
+            end
+        end
+    end
+    -- CDM-displayed entries first, then the rest of the database, each A-Z
+    table.sort(out, function(a, b)
+        if a.shown ~= b.shown then return a.shown end
+        return (a.name or "") < (b.name or "")
+    end)
+    return out
 end
 
 function AuraIcons.ImportFromCDM()
@@ -1408,7 +2059,7 @@ function AuraIcons.ImportFromCDM()
                     for id in pairs(includeMap) do
                         if seen[id] then dupe = true break end
                     end
-                    if dupe or db.auraIcons[AuraIcons.MakeID(primary)] then
+                    if dupe or AuraIcons.FindBySpellID(primary) then
                         skipped = skipped + 1
                     else
                         -- BOTH units, like Blizzard's own CDM (buff-on-me OR
@@ -1479,15 +2130,113 @@ SlashCmdList.ARCAURAICONS = function(msg)
             local subInfo = ""
             if e then
                 for _, sub in ipairs(e.subs) do
-                    subInfo = subInfo .. " " .. sub.unit .. (sub.frame and "=btn" or "=NOBTN")
+                    subInfo = subInfo .. " " .. sub.unit
+                        .. "/" .. FilterForLane(def, { harmful = sub.harmful })
+                        .. (sub.frame and "=btn" or "=NOBTN")
+                end
+            end
+            -- ACCEPTED SPELL IDS. The engine only ever shows an aura whose spellId
+            -- is a key in here (Blizzard's DoesAuraPassCandidateFilters), so a
+            -- "wrong aura is showing" report is answered by this line alone: either
+            -- the stray id is listed (bad def.spellIDs, usually from a CDM import
+            -- pulling a wide linked set) or it is not, and the cause is elsewhere.
+            local ids, nIDs = {}, 0
+            for id in pairs(IncludeMap(def)) do
+                nIDs = nIDs + 1
+                if nIDs <= 8 then
+                    local nm = C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(id)
+                    ids[#ids + 1] = tostring(id) .. (nm and ("=" .. nm) or "")
                 end
             end
             print(string.format("  %s mode=%s visible=%s holder=%s parked=%s%s",
                 arcID, def.unitMode or "?", tostring(AuraIcons.ShouldBeVisible(def)),
                 tostring(e and e.holder ~= nil), tostring(e and e.parked or false), subInfo))
+            print(string.format("      accepts %d id(s): %s%s", nIDs,
+                table.concat(ids, ", "), (nIDs > 8) and " ..." or ""))
         end
     end
     print("  defs=" .. n .. "   (/arcaura add <spellID> [buff|debuff|both]  |  /arcaura import)")
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- STACK-TEXT DIAGNOSTIC (/arcstacks): settings-as-read, formatter registry
+-- state, button bind versions, CDM count-overlay state. "/arcstacks watch"
+-- toggles caller attribution on the native count's SetAlpha (catches any
+-- writer fighting the overlay's hide).
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function ChtSummary(key)
+    local cfg = ns.CDMEnhance and ns.CDMEnhance.GetIconSettings and ns.CDMEnhance.GetIconSettings(key)
+    local cht = cfg and cfg.chargeText
+    if not cht then cht = RawChargeTextFallback(key) end
+    if not cht then return "cht=nil" end
+    local bandStr = ""
+    if type(cht.thresholdBands) == "table" then
+        for i = 1, 6 do
+            local b = cht.thresholdBands[i]
+            if b and b.enabled and b.threshold then
+                bandStr = bandStr .. " b" .. i .. "@" .. tostring(b.threshold)
+            end
+        end
+    end
+    return string.format("en=%s show1=%s bands=%s%s",
+        tostring(cht.enabled ~= false), tostring(cht.showSingleStack == true),
+        tostring(cht.thresholdColorEnabled == true), bandStr)
+end
+
+SLASH_ARCSTACKS1 = "/arcstacks"
+SlashCmdList.ARCSTACKS = function(msg)
+    local cmd = (msg or ""):match("^%s*(%S*)")
+    if cmd == "watch" then
+        if ns.StackColor and ns.StackColor.ToggleAlphaWatch then
+            ns.StackColor.ToggleAlphaWatch()
+        else
+            print("|cff00CCFF[ArcStacks]|r overlay module has no watch on this client")
+        end
+        return
+    end
+    if cmd == "settle" then
+        AuraIcons.StackSettle()
+        if ns.StackColor and ns.StackColor.RefreshOverlays then ns.StackColor.RefreshOverlays() end
+        print("|cff00CCFF[ArcStacks]|r manual settle requested")
+        return
+    end
+    print(string.format("|cff00CCFF[ArcStacks]|r 12.1=%s  db=%s  spec=%s  fmtV=%d  aurasSecret=%s",
+        tostring(IS_121), tostring(ns.db ~= nil),
+        tostring(ns.CDMShared and ns.CDMShared.GetCurrentSpecKey and ns.CDMShared.GetCurrentSpecKey()),
+        liveFormatterVersion, tostring(AurasSecretNow())))
+    print("|cffFFD100-- aura icons --|r")
+    local shown = 0
+    for arcID, entry in pairs(entries) do
+        shown = shown + 1
+        local f = liveFormatters[arcID]
+        local nbp = 0
+        if f and f.GetBreakpoints then
+            local bps = f:GetBreakpoints()
+            nbp = type(bps) == "table" and #bps or 0
+        end
+        local subInfo = ""
+        for _, sub in ipairs(entry.subs or {}) do
+            local b = sub.frame
+            local acc = "-"
+            if b then
+                if b.CanBeAccessedInContext then
+                    acc = tostring(b:CanBeAccessedInContext())
+                else
+                    acc = tostring(not (b.IsForbidden and b:IsForbidden()))
+                end
+            end
+            subInfo = subInfo .. string.format(" %s[btn=%s acc=%s boundV=%s]",
+                sub.unit, tostring(b ~= nil), acc, tostring(b and b._arcFmtBoundV))
+        end
+        print(string.format("  %s  fmt=%s bp=%d  %s  |%s",
+            arcID, tostring(f ~= nil), nbp, ChtSummary(arcID), subInfo))
+    end
+    if shown == 0 then print("  (no aura icon entries)") end
+    if ns.StackColor and ns.StackColor.DebugDump then
+        ns.StackColor.DebugDump(ChtSummary)
+    end
+    print("  (/arcstacks watch = alpha attribution  |  /arcstacks settle = force refresh)")
 end
 
 if IS_121 then
@@ -1523,15 +2272,22 @@ if IS_121 then
                 loadWindowOver = true
                 PreBuildAllSlots()
             end
+            -- The AceDB exists from here (ArcUI_Options' PLAYER_LOGIN handler
+            -- runs first — event registration follows toc load order): settle
+            -- the live formatters the ADDON_LOADED prebuild derived from the
+            -- raw fallback, and re-bind accessible buttons.
+            AuraIcons.StackSettle()
             -- STAGGERED passes (totem-module pattern): a single early pass
             -- raced ArcAuras.Enable — the master-enable gate was still false
             -- at +1s, every def skipped, and NO icons built for the session.
             C_Timer.After(1.5, AuraIcons.RefreshVisibility)
             C_Timer.After(4.5, AuraIcons.RefreshVisibility)
         else
-            -- spec/talent change: debounced re-evaluation
+            -- spec/talent change: debounced re-evaluation; formatters must
+            -- re-derive too — per-icon settings are per-spec
             C_Timer.After(1.0, AuraIcons.RefreshVisibility)
             C_Timer.After(3.0, AuraIcons.RefreshVisibility)
+            C_Timer.After(1.2, AuraIcons.StackSettle)
         end
     end)
 end

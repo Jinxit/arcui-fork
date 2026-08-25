@@ -29,6 +29,236 @@ local C_DESC  = "ffb0b0b0"  -- entry description
 -- ===================================================================
 CL.versions = {
   {
+    version = "3.8.3",
+    sections = {
+      {
+        header = "New Features", color = C_NEW, items = {
+          { title = "Keep Texture Still", desc = "New toggle for bars that mirror a Cooldown Manager timer and fill up as time passes: the bar texture stays in place while the fill moves through it, instead of the whole texture stretching with the fill. Find it in the bar's Fill section." },
+        },
+      },
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "The bar list now tells you why a bar is not on screen", desc = "A bar that exists but is hidden now says why next to its name: not shown on this spec, opacity set to 0, or hidden because its aura is not active. No more hunting for bars that are working exactly as configured." },
+          { title = "Totem slots answer the icon field", desc = "Typing an icon ID for a totem slot now explains that totem slots always show the totem's own icon, instead of silently doing nothing." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Custom icons sometimes did not apply at login", desc = "A custom icon on a Cooldown Manager icon could show the default art until you re-entered the ID in the options panel. It now applies on its own, at login and whenever the game reshuffles icons." },
+          { title = "Custom icons fought the icon in combat", desc = "A custom icon could flip back and forth against the original art during fights. One system now owns the icon art, so the flicker is gone." },
+          { title = "Custom icons on aura icons only changed the inactive look", desc = "The icon you picked now also shows while the buff or debuff is active, not just on the dimmed inactive state." },
+          { title = "Wrong spell tracked while a cooldown is replaced", desc = "When an ability temporarily turns into another one (for example during Ascendance), glows and cooldown state now follow the replacement spell instead of staying on the base spell for the whole window." },
+          { title = "Icons stayed grey after portals and zone changes", desc = "An icon set to desaturate only while its aura is missing could arrive in the new zone desaturated and stay that way until the options panel was opened." },
+          { title = "Error spam from trinket and potion icons in dungeons", desc = "A repeating error could start mid-dungeon and not stop until a reload." },
+          { title = "Bar name text went missing with Hide When Inactive", desc = "Custom aura bars set to hide when inactive showed up without their name text. The name now appears with the bar." },
+          { title = "Stray numbers floating on screen", desc = "A stack count could stay behind on screen after its bar hid, with nothing under it, until a reload." },
+          { title = "Proc Glow reset button was in the wrong section", desc = "The Reset Section button for Proc Glow sat under Spell Usability; it is back with the Proc Glow options." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.8.2",
+    sections = {
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "Aura icons and bars fix themselves", desc = "They could start showing a completely different aura after a vehicle, cinematic, faction change or boss kill. They now correct themselves right away." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Aura icon borders stayed visible when the icon was hidden", desc = "With Aura Missing opacity at 0 the border kept showing, usually after a group join or zone change." },
+          { title = "Castbar imports landed in the wrong place", desc = "A string from someone on a different interface scale now puts the bar where they had it." },
+          { title = "Kick Assist macro errors", desc = "The Macros tab could error, and managed macros could not be created or edited." },
+          { title = "Kick Assist edited the wrong macro", desc = "Edits could go to an account macro with the same name instead of yours." },
+          { title = "Errors while tracking potions, healthstones and trinkets", desc = "Opening the options panel could throw repeating errors." },
+          { title = "Error when adding a custom cooldown in a dungeon or raid", desc = "The duration auto-fill could error instead of leaving the field for you." },
+          { title = "Stray icons after logging in", desc = "Untracked icons with borders and tooltips could appear." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.8.1",
+    sections = {
+      {
+        header = "New Features", color = C_NEW, items = {
+          { title = "Aura icons pick a type and a set of units", desc = "Choose Buff, Debuff or both, then tick who to watch: you, target, focus, pet or party. The icon lights up when any ticked unit has the aura, so one icon can cover several people. Icons you already made keep working exactly as before." },
+          { title = "Aura picker", desc = "Add an aura icon by clicking it from a grid of everything the Cooldown Manager knows for your spec, instead of hunting for a spell ID. Auras you already track are dimmed, and ones in the database but missing from your CDM display are marked." },
+          { title = "Own auras only", desc = "An aura icon can ignore other players' copies of the same buff or debuff and react only to yours." },
+          { title = "More than one icon for the same aura", desc = "You can now create several icons for one spell, to watch it on different units or give each a different look." },
+        },
+      },
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "Account sharing now has one owner", desc = "Only the character you push from sends its layout out. Everyone else receives it and keeps their own edits local, so an alt can no longer take the profile over just by moving something. Press Push to make the character you are on the source." },
+          { title = "More of your setup travels between characters", desc = "Aura icons, custom icons and totem slots now sync with shared profiles. Until now they never left the source character, so alts quietly ended up with a different set." },
+          { title = "Trinket auto-tracking starts turned off", desc = "New characters no longer track trinket slots on their own. Characters that already have it on are untouched." },
+          { title = "Deleting a trinket icon turns its slot off", desc = "It no longer reappears on your next login." },
+          { title = "New Icon routing shows deleted groups", desc = "If a routing option points at a group you have since deleted, the panel says so instead of showing a blank dropdown." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Cooldown bars vanished on charge spells", desc = "The bar disappeared when the first charge came back. It now runs through the whole recharge." },
+          { title = "Pulling a shared profile removed your Arc icons", desc = "Aura icons, custom icons and totem icons were destroyed every time a profile was pulled. They now survive it." },
+          { title = "Deleted groups came back", desc = "Deleting a group in a shared layout now removes it for every character using that layout. Another character could previously rebuild it on login and hand it back to everyone." },
+          { title = "Icons from a deleted group", desc = "They become free icons you can place, instead of quietly recreating the group they pointed at." },
+          { title = "Totem icons jumped to the middle of the screen", desc = "They no longer lose their position when you log in." },
+          { title = "Icons drifted off the side of the screen", desc = "Icons could be pushed further right each time until they left the screen entirely." },
+          { title = "Stray icons appeared after logging in", desc = "Untracked icons with borders and working tooltips no longer show up." },
+          { title = "Errors with potions, healthstones and trinkets", desc = "Fixed an error that could repeat in dungeons and raids for anyone tracking them." },
+          { title = "Icons stranded when a group was removed", desc = "Icons whose group disappeared during a profile or spec change are no longer left styled but unplaceable." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.8.0.b",
+    sections = {
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "Display Export", desc = "\"Bars Export\" is now \"Display Export\" and includes your textures and castbar, so one string moves your whole setup." },
+          { title = "Textures ask for a tracking type", desc = "New textures now show \"Type Not Set\" until you pick Buff, Debuff, Pet Buff, Totem or Ground, just like bars." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Icons set to show while a buff is missing didn't appear", desc = "They stayed hidden if Cooldown Manager's \"Hide when inactive\" was on. Your Aura Missing opacity controls this again." },
+          { title = "Icons flickered when a buff ended", desc = "The brief blink as an aura dropped is gone." },
+          { title = "Totem icons stayed bright on cooldown", desc = "Totem spells that show a cooldown, like Surging Totem, now grey out properly." },
+          { title = "Pandemic glow stayed on", desc = "It could keep glowing after the aura expired until you switched target." },
+          { title = "Cooldown Manager tooltip errors", desc = "Hovering an icon could spam errors. Fixed at the source this time." },
+          { title = "Spell usability tinting removed desaturation", desc = "Icons randomly stopped greying out while on cooldown." },
+          { title = "Error spam when a spell changed form", desc = "Fixed a burst of errors in dungeons and raids." },
+          { title = "Hidden Opacity ignored in combat", desc = "Bars could sit at the wrong opacity once combat began." },
+          { title = "Arc icon tooltips", desc = "Hovering showed an internal window instead of the normal spell tooltip." },
+          { title = "Timer icons flickered", desc = "Custom timers no longer blink when their group refreshes." },
+          { title = "Icons hidden by bars could stay hidden", desc = "They now come back when they should." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.8.0.a",
+    sections = {
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Border errors in instances", desc = "The 3.8.0 border alignment fix could throw errors in restricted content (dungeons, raids, restricted world events), where the game hides even rendering properties from addons. The border now remembers what it needs from unrestricted moments and never asks the game for it under lockdown." },
+          { title = "Stack text behind the border on aura icons", desc = "On Arc aura icons the stack count and duration text could be covered by the icon border; all icon texts now always draw above it." },
+          { title = "Right-click menu on Arc icons removed", desc = "The context menu (configure, always-show, change icon, remove) is gone; everything it offered lives in the Arc Auras panel and the CDM Icons catalog." },
+          { title = "Oversized icons in groups", desc = "An icon with Group Scale off and a larger custom size now sits correctly inside its group boundary; before, it escaped out the top-left corner while empty space collected bottom-right." },
+          { title = "CDM tooltip errors, round two", desc = "Hovering a CDM icon in restricted content could still produce a stream of tooltip errors every refresh tick; ArcUI-built tooltips no longer let the game's own tooltip refresher engage at all." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.8.0",
+    sections = {
+      {
+        header = "New Features", color = C_NEW, items = {
+          { title = "Texture Tracking Types", desc = "Textures now use the same tracking dropdown as bars: Buff (you), Debuff (target), Buff (pet), and Totem. Images can react to pet buffs and totem timers, with duration text and Drain As It Expires working on every type." },
+          { title = "Timer Mirror fill options", desc = "Bars that mirror a Cooldown Manager timer can now fill up instead of draining, reverse direction, and animate smoothly." },
+        },
+      },
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "Texture editor sub-tabs", desc = "Each texture's settings are organized into Source, Transform, and Duration sub-tabs instead of one long panel." },
+          { title = "Cleaner texture creation", desc = "Creating a texture no longer jumps you to a different tab; the new texture expands in place and asks for its tracking type up front, just like bars." },
+          { title = "Options apply on the spot", desc = "Enabling or disabling duration text, drains, and Show Duration on bars and textures now takes effect the moment you click, instead of waiting for a reload or the next time the aura appears." },
+          { title = "Description cleanup", desc = "Outdated notes in the texture panels were replaced with what actually applies on 12.1." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Free icons vanishing in combat", desc = "Fixed free-placed icons disappearing at the start of combat until a reload." },
+          { title = "Aura state stuck after target swaps", desc = "Target-debuff icons could keep their active look, or stay desaturated or hidden, after switching targets; every target change now re-verifies the real aura state." },
+          { title = "Icon borders drawn off the icon", desc = "Borders could render up to a pixel off the icon art at certain screen positions, and moving the group changed which icons were affected. Border and icon now render by the same pixel rules and stay glued at any position." },
+          { title = "Arc icon size in groups", desc = "Arc spell and item icons in a group now match their CDM neighbors exactly: identical pixel-perfect frame size after drags and options-panel closes, and identical icon art trim (arc art was cropped slightly less than Blizzard's, making it look a different size)." },
+          { title = "Group mouse errors in a party", desc = "Fixed \"attempt to access forbidden object\" errors from group click-through handling while in a group or raid." },
+          { title = "Tooltip errors in restricted content", desc = "Hovering CDM icons in instances could start a stream of tooltip errors; ArcUI now builds those tooltips itself from safe data." },
+          { title = "Wrong aura on custom debuff icons", desc = "A custom debuff icon could briefly show an unrelated buff after loading screens or spec changes; tracking filters are now always explicit and re-asserted at those moments." },
+          { title = "Border errors in instances (3.8.0.a)", desc = "The 3.8.0 border alignment fix could throw errors in restricted content (dungeons, raids, restricted world events), where the game hides even rendering properties from addons. The border now remembers what it needs from unrestricted moments and never asks the game for it under lockdown, same as the potion fix in 3.7.12.b." },
+          { title = "Stack text behind the border on aura icons (3.8.0.a)", desc = "On Arc aura icons the stack count and duration text could be covered by the icon border; all icon texts now always draw above it." },
+          { title = "Right-click menu on Arc icons removed (3.8.0.a)", desc = "The context menu (configure, always-show, change icon, remove) is gone; everything it offered lives in the Arc Auras panel and the CDM Icons catalog." },
+          { title = "Oversized icons in groups (3.8.0.a)", desc = "An icon with Group Scale off and a larger custom size now sits correctly inside its group boundary; before, it escaped out the top-left corner while empty space collected bottom-right, and drag-and-drop targeting in that group was off by the same amount." },
+          { title = "CDM tooltip errors, round two (3.8.0.a)", desc = "Hovering a CDM icon in restricted content could still produce a stream of tooltip errors every refresh tick; ArcUI-built tooltips no longer let the game's own tooltip refresher engage at all." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.7.12",
+    sections = {
+      {
+        header = "New Features", color = C_NEW, items = {
+          { title = "New Icon Routing", desc = "Choose where newly added Cooldown Manager icons go, per category: send new Essential, Utility, or Buff icons to a specific group, to a free position, or leave the default. Set it account-wide with per-character and per-spec overrides in the Groups panel, and CDM export/import strings can now carry your routing (new \"New Icons\" checkboxes with a preview of where each category goes)." },
+          { title = "Show IDs on Hover", desc = "New global toggle that adds an ArcUI ID readout to tooltips: cooldown ID, spell ID, override and linked spells, equip slot, item category, and the icon texture ID the Custom Icon box accepts. Works on CDM icons, Arc icons, action bars, buffs, bags and more." },
+          { title = "Out of Stock look for potions and healthstones", desc = "Cooldown Manager potion and healthstone icons get their own Out of Stock section: choose desaturation, opacity, and an optional tint for when your bags run dry, and the icon recovers the moment you restock. Dim When Out of Stock is now available on these icons too." },
+          { title = "Pingable toggle (Arc Pings)", desc = "Every icon and group gets a Pingable toggle: turn it off and pings pass straight through that icon to the world instead of announcing the hovered spell. Works on Arc icons and Blizzard's own CDM icons." },
+          { title = "New sound: Kaching", desc = "An \"ArcUI: Kaching\" sound is now available in every ArcUI sound dropdown." },
+        },
+      },
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "Aura icon glows completed", desc = "The Aura Active glow on aura icons now supports Scale, X/Y Offset, Glow Strata, and Glow Frame Level; the style dropdown shows the style actually applied; and the Preview toggle now works on aura icons, showing the glow without the buff up so you can tune it." },
+          { title = "Totem, pet, and ground bars", desc = "These bars now honor a custom Max Duration and the bar-color and countdown-text threshold coloring options." },
+          { title = "Ping Keys with action bar addons", desc = "Ping Keys now work with Bartender4, ElvUI, and mixed bar setups, and follow rebinds and profile switches without re-adding." },
+          { title = "Max Duration honesty on 12.1", desc = "For regular aura bars the Max Duration option is now locked to Auto with an on-panel explanation (12.1 removed the API for a custom maximum); totem-type bars keep their working custom max." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Giant or wrong-sized CDM icons", desc = "Fixed the intermittent bug where icons could suddenly render huge or take another icon's size, most often when opening the options panel, plus new safety guards so a bad size can never be stamped again." },
+          { title = "Group renames", desc = "Renaming a group (including Essential/Utility/Buffs) no longer brings back an empty default group every login, and no longer leaves ghost drag overlays or floating slot-number badges behind." },
+          { title = "Aura icon states", desc = "Active Alpha now actually dims the icon and swipe, Preserve Duration Text keeps the texts at full strength, and Show Icon off hides the artwork while keeping duration and stack text visible, with the icon still shown for editing while the options panel is open." },
+          { title = "Pulse glow was invisible", desc = "The Pulse glow styles on aura icons rendered nothing in real play (they only showed in the preview); they now use the Cooldown Manager's own alert flash art." },
+          { title = "Potion and healthstone icons", desc = "Fixed the errors these icons could throw from usability tint, glows, and tooltip hover; potions now stay colored while their buff is running instead of greying out immediately; and Glow When Aura Active now works on item icons." },
+          { title = "Cooldown bars across specs", desc = "Bars set to show on multiple specs no longer read \"Tracking Failed\" outside the spec they were created in." },
+          { title = "Pet and totem bar countdowns", desc = "Duration text on pet, totem, and ground-effect bars (e.g. Call Dreadstalkers) shows again on 12.1, and aura bars with a manual max no longer sit stuck at full." },
+          { title = "Stack bars over 20 stacks", desc = "Ticks, borders, and the At Max color no longer vanish on bars with more than 20 stacks." },
+          { title = "Post-dungeon error", desc = "Fixed an \"EnableMouse on bad self\" error that could appear after dungeons on icons carrying the new stack-count displays." },
+          { title = "CN client crash shield", desc = "Worked around a Chinese-client bug that could crash the game when aura countdown text refreshes; decimal countdowns on aura icons show whole seconds on the CN client until Blizzard fixes it." },
+          { title = "Custom Icons form error", desc = "Adding a Custom Icon timer by spell ID no longer errors on submit." },
+          { title = "Debuff bars track only your own debuff again", desc = "Since 12.1, a duration bar, texture, stack count, or duration override for a target debuff (e.g. Colossus Smash) could light up when another player applied the same debuff. They now follow only your own cast, as before." },
+          { title = "Potion and healthstone errors in restricted content", desc = "The bag-item features could throw errors during 12.1 restricted open-world events (e.g. Prey Hunts) and in instances, where the game hides item identities from addons. ArcUI now remembers each item's identity from unrestricted moments, so cooldown visuals, out-of-stock detection, and tooltips keep working fully everywhere." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.7.11",
+    sections = {
+      {
+        header = "New Features", color = C_NEW, items = {
+          { title = "Use Texture Colors", desc = "A new toggle on aura, stack, duration, cooldown, charge, and resource bars plus both castbars: show your fill texture's own colors (gradients, rainbows, artwork) instead of tinting it with the bar color. Color controls that no longer apply gray out and say why." },
+          { title = "One voice for the whole addon", desc = "Everything that speaks (Cooldown Reminder, CDM aura alerts, Arc icon alerts) now shares one Voice and Speech Rate setting and respects your Text-to-Speech volume. New speech controls include a Test Voice button, the \"sound between messages\" tick toggle, and a shortcut to WoW's own speech options." },
+          { title = "Ignore Spell Overrides for Arc spell icons", desc = "A new per-icon toggle that keeps an Arc spell icon on its base spell's cooldown, artwork, and glows even while the spell is temporarily overridden." },
+        },
+      },
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "Auto-Track Trinket Slots got their own section", desc = "The trinket auto-track controls moved out of the filter dropdown into a collapsible section right under Global Options, and an auto-tracked icon's Enabled toggle now drives the slot setting itself, so turning one off finally sticks across reloads." },
+          { title = "Proper alert sound pickers", desc = "CDM aura alert dropdowns now show sound names with a preview button instead of raw file paths, and sound and speech can be set independently for every alert." },
+          { title = "Icons stay honest through spec changes", desc = "An icon could keep an \"aura active\" look or a stuck ready glow after changing specs; ArcUI now re-checks every icon once the Cooldown Manager finishes shuffling and clears anything stale automatically." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "CDM aura alerts fire again", desc = "The alert feature was silently broken, and it now also covers icons the Cooldown Manager creates mid-session in dungeons." },
+          { title = "Potions and healthstones get cooldown visuals", desc = "Bag-item icons in the Cooldown Manager never dimmed or dropped their ready glow. Item icons' ready glow also no longer stays on through the whole cooldown, and Ignore Aura Override now works on them." },
+          { title = "Custom Icon field works again", desc = "Entering a spell, item, or icon ID in the Custom Icon box threw an error on every keystroke." },
+          { title = "Custom icons stop flickering in combat", desc = "A custom icon could snap back to the original artwork and flip between the two mid-fight, especially in dungeons." },
+          { title = "Stack bars show their countdown in combat", desc = "A stack bar's duration text went blank the moment combat started." },
+          { title = "Settings apply without a reload", desc = "Changing countdown color thresholds, visiting the options panel, or flipping a bar between Stacks and Duration mode could silently kill a bar or texture countdown until a reload, especially after a fight." },
+          { title = "Textures added by spell ID count down", desc = "Their duration text and drain never attached at all." },
+          { title = "Hiding an icon keeps its texts", desc = "With Show Icon off, the stack count and countdown vanished along with the icon art instead of floating on their own." },
+        },
+      },
+    },
+  },
+  {
     version = "3.7.10",
     sections = {
       {
@@ -575,6 +805,13 @@ local function CheckOnLogin()
   end
   g.changelog = g.changelog or {}
   if g.changelog.disabled then return end
+
+  -- The 3.7.10 notes (and their guided tours) describe 12.1 features. If the
+  -- client is still on an older patch, hold the auto-pop and DON'T mark the
+  -- version seen — it then pops on the first login after the client is 12.1.
+  -- Manual /arccl is unaffected.
+  local iface = select(4, GetBuildInfo())
+  if type(iface) == "number" and iface < 120100 then return end
 
   local cur = GetBaseVersion()   -- base version: minor hotfixes (.a/.b) don't re-pop
   if g.changelog.lastSeen ~= cur then
