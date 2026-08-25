@@ -259,8 +259,14 @@ GetDB = function()
     if not db.trackedSpells then db.trackedSpells = {} end
     if not db.positions then db.positions = {} end
     if not db.globalSettings then db.globalSettings = {} end
+    -- OPT-IN, per the addon's own rule. This used to seed trinket slots 13 and 14
+    -- ON, so ArcUI recreated an icon for whatever was equipped every login and
+    -- deleting one was meaningless. The seeded value is PERSISTED, so every
+    -- character that has already logged in owns a stored copy and keeps whatever
+    -- it has -- changing the seed flips ONLY brand-new characters and profiles.
+    -- No migration needed, nobody who likes it on loses it.
     if not db.autoTrackSlots then
-        db.autoTrackSlots = { [13] = true, [14] = true }
+        db.autoTrackSlots = {}
     end
     if db.enabled == nil then db.enabled = true end
     if db.autoTrackEquippedTrinkets == nil then db.autoTrackEquippedTrinkets = false end
@@ -374,7 +380,9 @@ function ArcAuras.ParseArcID(arcID)
         local slot = tonumber(arcID:sub(#ID_PREFIX.TOTEM + 1))
         return "totem", slot
     elseif arcID:find("^" .. ID_PREFIX.AURA) then
-        local spellID = tonumber(arcID:sub(#ID_PREFIX.AURA + 1))
+        -- Same "_N" dedup suffix as timers (copies of one aura): leading digits
+        -- only, or tonumber("356_2") returns nil and the id is lost.
+        local spellID = tonumber(arcID:sub(#ID_PREFIX.AURA + 1):match("^(%d+)") or "")
         return "aura", spellID
     end
 
@@ -827,6 +835,11 @@ local function CreateArcAuraFrame(arcID, config)
     -- the same name creates a duplicate. Reuse + reset instead.
     local frame = _G[frameName]
     if frame then
+        -- Un-sanction hides: DestroyFrame stamped `_arcAllowHide = true` so the
+        -- maintain hooks would let it die. A reused frame is alive again and
+        -- must be protected like any other member.
+        frame._arcAllowHide = nil
+        frame._arcInstantResurrect = nil
         frame:SetParent(UIParent)
         frame:ClearAllPoints()
         frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
@@ -1086,14 +1099,11 @@ local function CreateArcAuraFrame(arcID, config)
     frame:SetScript("OnLeave", function()
         GameTooltip:Hide()
     end)
-    
-    -- Right-click for options
-    frame:SetScript("OnClick", function(self, button)
-        if button == "RightButton" then
-            ArcAuras.ShowContextMenu(self)
-        end
-    end)
-    frame:RegisterForClicks("RightButtonUp")
+
+    -- Right-click context menu REMOVED (3.8.0.a, by request): everything it
+    -- offered (configure, always-show, change icon, remove) lives in the Arc
+    -- Auras panel / CDM Icons catalog. No OnClick, no RegisterForClicks —
+    -- the ShowContextMenu functions below are unreachable from gameplay.
     
     return frame
 end
@@ -1101,6 +1111,39 @@ end
 -- ═══════════════════════════════════════════════════════════════════════════
 -- FRAME MANAGEMENT
 -- ═══════════════════════════════════════════════════════════════════════════
+
+-- Seed a brand-new icon at screen centre, slightly above the middle, and
+-- persist it so the placement survives a reload before the user ever drags it.
+-- ONLY legal once the position store is loaded -- see the restore guard in
+-- CreateFrame. Kept as one function so the guarded path and the deferred retry
+-- can never drift apart.
+local DEFAULT_FREE_X, DEFAULT_FREE_Y, DEFAULT_FREE_SIZE = 0, 50, 36
+local seedRetryQueued = {}
+
+local function SeedDefaultFreePosition(arcID)
+    local G = ns.CDMGroups
+    if not G or not G.savedPositions then return end
+    G.savedPositions[arcID] = {
+        type     = "free",
+        x        = DEFAULT_FREE_X,
+        y        = DEFAULT_FREE_Y,
+        iconSize = DEFAULT_FREE_SIZE,
+    }
+    -- Also register in freeIcons so the drag handler can find it.
+    if G.freeIcons then
+        G.freeIcons[arcID] = G.freeIcons[arcID] or {}
+        G.freeIcons[arcID].x        = DEFAULT_FREE_X
+        G.freeIcons[arcID].y        = DEFAULT_FREE_Y
+        G.freeIcons[arcID].iconSize = DEFAULT_FREE_SIZE
+    end
+    if G.SavePositionToSpec then
+        G.SavePositionToSpec(arcID, G.savedPositions[arcID])
+    end
+    if G.SaveFreeIconToSpec then
+        G.SaveFreeIconToSpec(arcID,
+            { x = DEFAULT_FREE_X, y = DEFAULT_FREE_Y, iconSize = DEFAULT_FREE_SIZE })
+    end
+end
 
 function ArcAuras.CreateFrame(arcID, config)
     if ArcAuras.frames[arcID] then
@@ -1151,33 +1194,36 @@ function ArcAuras.CreateFrame(arcID, config)
         -- the savedPositions[arcID] check and skip the seed entirely so we
         -- don't stomp their placements.
         -- ─────────────────────────────────────────────────────────────────
-        if ns.CDMGroups and ns.CDMGroups.savedPositions
+        --
+        -- RESTORE GUARD (the totems-at-screen-centre bug): "no entry in
+        -- savedPositions" only means NEW once that table is actually loaded.
+        -- At login it fills in asynchronously, so anything created during the
+        -- restore window saw an empty table, decided every icon was brand new,
+        -- and PERSISTED this centre seed over the real layout (SavePositionToSpec
+        -- below writes to disk immediately). Totems hit it every time because
+        -- their rebuild used to run on PLAYER_LOGIN with no delay. Defer the
+        -- seed instead of inventing a position; the icon is placed by the normal
+        -- restore, and if it really is new the retry seeds it a moment later.
+        local storeReady = ns.CDMShared and ns.CDMShared.IsGroupStoreReady
+            and ns.CDMShared.IsGroupStoreReady()
+        if ns.CDMGroups and ns.CDMGroups.savedPositions and not storeReady
+           and not ns.CDMGroups.savedPositions[arcID] and not seedRetryQueued[arcID] then
+            seedRetryQueued[arcID] = true
+            C_Timer.After(2.0, function()
+                seedRetryQueued[arcID] = nil
+                local G = ns.CDMGroups
+                if not G or not G.savedPositions then return end
+                if G.savedPositions[arcID] then return end        -- restore placed it
+                if not (ns.CDMShared and ns.CDMShared.IsGroupStoreReady
+                        and ns.CDMShared.IsGroupStoreReady()) then return end
+                if not (ns.ArcAuras and ns.ArcAuras.frames and ns.ArcAuras.frames[arcID]) then return end
+                SeedDefaultFreePosition(arcID)
+            end)
+        end
+
+        if storeReady and ns.CDMGroups and ns.CDMGroups.savedPositions
            and not ns.CDMGroups.savedPositions[arcID] then
-            local DEFAULT_X = 0       -- horizontal center
-            local DEFAULT_Y = 50      -- slightly above vertical center
-            local iconSize  = 36      -- matches CDMGroups default
-            ns.CDMGroups.savedPositions[arcID] = {
-                type     = "free",
-                x        = DEFAULT_X,
-                y        = DEFAULT_Y,
-                iconSize = iconSize,
-            }
-            -- Also register in freeIcons so the drag handler can find it.
-            if ns.CDMGroups.freeIcons then
-                ns.CDMGroups.freeIcons[arcID] = ns.CDMGroups.freeIcons[arcID] or {}
-                ns.CDMGroups.freeIcons[arcID].x        = DEFAULT_X
-                ns.CDMGroups.freeIcons[arcID].y        = DEFAULT_Y
-                ns.CDMGroups.freeIcons[arcID].iconSize = iconSize
-            end
-            -- Persist to spec profile so the centered position survives a
-            -- /reload immediately, even before the user drags the icon.
-            if ns.CDMGroups.SavePositionToSpec then
-                ns.CDMGroups.SavePositionToSpec(arcID, ns.CDMGroups.savedPositions[arcID])
-            end
-            if ns.CDMGroups.SaveFreeIconToSpec then
-                ns.CDMGroups.SaveFreeIconToSpec(arcID,
-                    { x = DEFAULT_X, y = DEFAULT_Y, iconSize = iconSize })
-            end
+            SeedDefaultFreePosition(arcID)
         end
 
         -- Aura icons (12.1) register as viewerType "aura": that is the
@@ -1225,10 +1271,30 @@ end
 function ArcAuras.DestroyFrame(arcID)
     local frame = ArcAuras.frames[arcID]
     if not frame then return end
-    
+
+    -- SANCTION THE HIDE FIRST. The CDMGroups maintain hooks (Hide/SetShown
+    -- fights, InstantResurrect + DeferredHideFight) check `_arcAllowHide`
+    -- before anything else -- it is the designed "ArcUI cleanup" escape hatch
+    -- -- but NOTHING ever set it, so the Hide() in STEP 6 fired while the
+    -- frame was still parented to its group container and the hook RESURRECTED
+    -- the frame we were destroying. Result: a ghost -- icon art hidden (STEP 5)
+    -- but the frame alive, restyled with border + tooltip by later sweeps.
+    -- The load-condition report (timer hidden by a talent condition showing a
+    -- border with a working tooltip after reload) was exactly this.
+    -- Set BEFORE UnregisterExternalFrame: member teardown can trigger the
+    -- same hooks. Cleared again on frame REUSE in CreateArcAuraFrame.
+    frame._arcAllowHide = true
+
     -- Clear caches
     InvalidateSettingsCache(arcID)
     InvalidateStackCache(arcID)
+
+    -- Forget the frame in CDMEnhance: enhancedFrames kept the dead arcID, so
+    -- every RefreshAllStyles / panel force-show sweep kept re-applying border,
+    -- tooltip and mouse to the ghost.
+    if ns.CDMEnhance and ns.CDMEnhance.ForgetFrame then
+        ns.CDMEnhance.ForgetFrame(arcID)
+    end
     
     -- Unregister from Masque via unified system
     if ns.Masque and ns.Masque.RemoveFrame then
@@ -1273,6 +1339,17 @@ function ArcAuras.DestroyFrame(arcID)
     if ns.CDMGroups and ns.CDMGroups.UnregisterExternalFrame then
         ns.CDMGroups.UnregisterExternalFrame(arcID)
     end
+
+    -- FrameRegistry: forget the frame COMPLETELY. Its byCooldownID index was
+    -- the resurrection vector the _arcAllowHide sanction could not close: the
+    -- index survived the destroy, FrameSources[3] validated the corpse purely
+    -- by frame.cooldownID == cdID, and a savedPositions-driven pass re-adopted
+    -- it into its old group -- phantom member (the "group grew a column"
+    -- report), re-styled ghost border, live tooltip. Caught by /afi ghost:
+    -- allowHide=true + member:Group1 on the same row.
+    if ns.FrameRegistry and ns.FrameRegistry.UnregisterFrame then
+        ns.FrameRegistry:UnregisterFrame(frame)
+    end
     
     -- ═══════════════════════════════════════════════════════════════════════════
     -- STEP 2: Stop any visual effects (glows, animations)
@@ -1289,7 +1366,10 @@ function ArcAuras.DestroyFrame(arcID)
     -- This prevents "ghost frames" from fighting to restore position
     -- ═══════════════════════════════════════════════════════════════════════════
     
-    -- Clear hook flags (hooks can't be removed, but clearing flags disables them)
+    -- Clear hook-INSTALL flags. NOTE: these do NOT disable the hooks -- the
+    -- hook bodies never read them; they only prevent double-install on reuse.
+    -- What actually stops the hooks from fighting this destroy is
+    -- `_arcAllowHide` (set at the top) plus the property clears below.
     frame._cdmgClearPointsHooked = nil
     frame._cdmgClearPointsFreeHooked = nil
     frame._cdmgScaleHooked = nil
@@ -1357,10 +1437,18 @@ function ArcAuras.DestroyFrame(arcID)
     -- ═══════════════════════════════════════════════════════════════════════════
     -- STEP 6: Final cleanup - hide and orphan the frame
     -- ═══════════════════════════════════════════════════════════════════════════
+    -- STRIP IDENTITY before the final hide: any lookup keyed on cooldownID
+    -- (registry index rebuilds, viewer sweeps, member restores) must see a
+    -- frame that answers to NOTHING. Both fields are re-stamped by
+    -- CreateArcAuraFrame (lines ~861-862) on fresh create AND on named-frame
+    -- reuse, so a later re-creation is unaffected.
+    frame.cooldownID = nil
+    frame._arcAuraID = nil
+
     frame:Hide()
     frame:ClearAllPoints()
     frame:SetParent(nil)  -- Orphan the frame (allows GC if no other refs)
-    
+
     -- Remove from our frames table
     ArcAuras.frames[arcID] = nil
 end
@@ -1369,71 +1457,62 @@ function ArcAuras.GetFrame(arcID)
     return ArcAuras.frames[arcID]
 end
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ICON OVERRIDE — THE single lookup for every Arc icon kind.
+--
+-- Each kind keeps its override in its own store (items and trinkets in
+-- trackedItems, spells in trackedSpells, timers in customTimers, auras in
+-- auraIcons, totems have none). The STORES may differ; the PRECEDENCE must
+-- not. Every reader and every writer goes through here so they cannot drift
+-- apart the way the four hand-rolled copies of this lookup did.
+--
+-- Returns a texture (FileDataID) or nil = "no override, use the source art".
+-- ═══════════════════════════════════════════════════════════════════════════
+function ArcAuras.GetIconOverride(arcID)
+    if type(arcID) ~= "string" then return nil end
+    local db = GetDB()
+    if not db then return nil end
+
+    if arcID:match("^arc_spell_") then
+        local c = db.trackedSpells and db.trackedSpells[arcID]
+        return c and c.iconOverride or nil
+    elseif arcID:match("^arc_timer_") then
+        -- timers resolve their source to a FileDataID at set time and keep it
+        -- in .icon; .iconOverride is the newer unified key. Accept both.
+        local c = db.customTimers and db.customTimers[arcID]
+        return c and (c.iconOverride or c.icon) or nil
+    elseif arcID:match("^arc_aura_") then
+        local d = db.auraIcons and db.auraIcons[arcID]
+        return d and d.iconOverride or nil
+    elseif arcID:match("^arc_totem_") then
+        return nil  -- totem slots draw the totem's own art; no override store
+    end
+
+    local c = db.trackedItems and db.trackedItems[arcID]
+    return c and c.iconOverride or nil
+end
+
 function ArcAuras.UpdateFrameIcon(frame, config)
     if not frame or not config then return end
-    
-    local icon = nil
-    
+
+    -- ONE override lookup for every kind, then per-kind DEFAULT art only if
+    -- the user has not overridden it. The item/name stamps below are set
+    -- either way — they describe the tracked source, not the displayed art.
+    local icon = ArcAuras.GetIconOverride(frame._arcAuraID)
+
     if config.type == "trinket" and config.slotID then
-        -- Check for icon override on trinket/item frames
-        local db2 = GetDB()
-        local trackedItemConfig = db2 and db2.trackedItems and db2.trackedItems[frame._arcAuraID]
-        if trackedItemConfig and trackedItemConfig.iconOverride then
-            icon = trackedItemConfig.iconOverride
-        else
-            local itemID, itemName, itemIcon = GetSlotItemInfo(config.slotID)
-            icon = itemIcon
-        end
-        local itemID, itemName = GetSlotItemInfo(config.slotID)
+        local itemID, itemName, itemIcon = GetSlotItemInfo(config.slotID)
+        if not icon then icon = itemIcon end
         frame._currentItemID = itemID
         frame._currentItemName = itemName
     elseif config.type == "item" and config.itemID then
-        local db2 = GetDB()
-        local trackedItemConfig = db2 and db2.trackedItems and db2.trackedItems[frame._arcAuraID]
-        if trackedItemConfig and trackedItemConfig.iconOverride then
-            icon = trackedItemConfig.iconOverride
-        else
-            local itemName, itemIcon = GetItemNameAndIcon(config.itemID)
-            icon = itemIcon
-        end
+        local itemName, itemIcon = GetItemNameAndIcon(config.itemID)
+        if not icon then icon = itemIcon end
         frame._currentItemID = config.itemID
-        local itemName = GetItemNameAndIcon(config.itemID)
         frame._currentItemName = itemName
-    elseif config.type == "spell" and config.spellID then
-        -- Check for user icon override first (stored in trackedSpells config)
-        local db = GetDB()
-        local trackedConfig = db and db.trackedSpells and db.trackedSpells[frame._arcAuraID]
-        if trackedConfig and trackedConfig.iconOverride then
-            icon = trackedConfig.iconOverride
-        else
-            local spellInfo = C_Spell.GetSpellInfo(config.spellID)
-            if spellInfo then
-                icon = spellInfo.iconID or spellInfo.originalIconID
-            end
-        end
-        frame._currentItemName = config.name or (C_Spell.GetSpellInfo(config.spellID) or {}).name
-        frame._currentItemID = nil
-    elseif config.type == "timer" and config.spellID then
-        -- Custom timer icon: user override from customTimers config, else spell icon.
-        local db = GetDB()
-        local timerConfig = db and db.customTimers and db.customTimers[frame._arcAuraID]
-        if timerConfig and timerConfig.icon then
-            icon = timerConfig.icon
-        else
-            local spellInfo = C_Spell.GetSpellInfo(config.spellID)
-            if spellInfo then
-                icon = spellInfo.iconID or spellInfo.originalIconID
-            end
-        end
-        frame._currentItemName = config.name or (C_Spell.GetSpellInfo(config.spellID) or {}).name
-        frame._currentItemID = nil
-    elseif config.type == "aura" and config.spellID then
-        -- Aura icon (12.1): user override from auraIcons def, else spell icon.
-        local db = GetDB()
-        local auraDef = db and db.auraIcons and db.auraIcons[frame._arcAuraID]
-        if auraDef and auraDef.iconOverride then
-            icon = auraDef.iconOverride
-        else
+    elseif (config.type == "spell" or config.type == "timer" or config.type == "aura")
+        and config.spellID then
+        if not icon then
             local spellInfo = C_Spell.GetSpellInfo(config.spellID)
             if spellInfo then
                 icon = spellInfo.iconID or spellInfo.originalIconID
@@ -1442,7 +1521,7 @@ function ArcAuras.UpdateFrameIcon(frame, config)
         frame._currentItemName = config.name or (C_Spell.GetSpellInfo(config.spellID) or {}).name
         frame._currentItemID = nil
     end
-    
+
     if icon then
         frame.Icon:SetTexture(icon)
         -- NOTE: Don't set desaturation here - the update loop / spell engine handles cooldown state
@@ -1451,6 +1530,185 @@ function ArcAuras.UpdateFrameIcon(frame, config)
         frame._currentItemID = nil
         frame._currentItemName = nil
     end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ICON OVERRIDE — THE ONE PATH. Do not add a second one.
+--
+--   read  : ArcAuras.GetIconOverride(arcID)     -> texture, or nil
+--   read  : ArcAuras.GetIconOverrideID(arcID)   -> the source ID the user typed
+--   write : ArcAuras.SetIconOverride(arcID, id) -> true when the store changed
+--   paint : ArcAuras.RepaintIcon(arcID)         -> re-render from the stores
+--   pick  : ArcAuras.ShowIconOverridePicker(arcID)
+--
+-- Every kind (trinket / item / spell / timer / aura / totem) goes through
+-- these. The STORES differ per kind and only these functions know which; the
+-- PRECEDENCE must never be re-implemented at a call site. Four hand-rolled
+-- copies of this logic had already drifted apart and produced icons that
+-- never applied on login or fought each other in combat.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- The source ID the user entered (for prefilling the picker / tooltips), as
+-- opposed to GetIconOverride which returns the resolved texture.
+function ArcAuras.GetIconOverrideID(arcID)
+    if type(arcID) ~= "string" then return nil end
+    local db = GetDB()
+    if not db then return nil end
+    if arcID:match("^arc_spell_") then
+        local c = db.trackedSpells and db.trackedSpells[arcID]
+        return c and c.iconOverrideID or nil
+    elseif arcID:match("^arc_timer_") then
+        local c = db.customTimers and db.customTimers[arcID]
+        return c and (c.iconOverrideID or c.iconID) or nil
+    elseif arcID:match("^arc_aura_") then
+        local d = db.auraIcons and db.auraIcons[arcID]
+        return d and d.iconOverrideID or nil
+    elseif arcID:match("^arc_totem_") then
+        return nil
+    end
+    local c = db.trackedItems and db.trackedItems[arcID]
+    return c and c.iconOverrideID or nil
+end
+
+-- Repaint one Arc icon from the CURRENT stores. THE one repaint entry point,
+-- so "set the value" and "show the value" can never diverge.
+function ArcAuras.RepaintIcon(arcID)
+    if type(arcID) ~= "string" then return end
+
+    -- AURA icons live on the 12.1 engine container: the holder ghost is ours
+    -- to paint directly, while the ACTIVE button art is engine-driven and its
+    -- override layer is re-evaluated inside the one styling path.
+    if arcID:match("^arc_aura_") then
+        if not ns.AuraIcons then return end
+        local e = ns.AuraIcons.GetEntry and ns.AuraIcons.GetEntry(arcID)
+        if e and e.holder and e.holder.Icon then
+            local db = GetDB()
+            local def = db and db.auraIcons and db.auraIcons[arcID]
+            e.holder.Icon:SetTexture(ArcAuras.GetIconOverride(arcID)
+                or (def and def.icon) or 134400)
+        end
+        if ns.AuraIcons.ApplySettings then ns.AuraIcons.ApplySettings(arcID) end
+        return
+    end
+
+    -- TIMER frames live in their own registry, not ArcAuras.frames
+    if arcID:match("^arc_timer_") then
+        local td = ns.ArcAurasTimer and ns.ArcAurasTimer.timers
+            and ns.ArcAurasTimer.timers[arcID]
+        local f = td and td.frame
+        if f and f.Icon then
+            local tex = ArcAuras.GetIconOverride(arcID)
+            if not tex then
+                local db = GetDB()
+                local cfg = db and db.customTimers and db.customTimers[arcID]
+                local info = cfg and cfg.spellID and C_Spell.GetSpellInfo(cfg.spellID)
+                tex = info and (info.iconID or info.originalIconID) or 134400
+            end
+            f.Icon:SetTexture(tex)
+        end
+        return
+    end
+
+    local frame = ArcAuras.frames and ArcAuras.frames[arcID]
+    if not frame or not frame.Icon then return end
+    local config = frame._arcConfig
+    if config then
+        ArcAuras.UpdateFrameIcon(frame, config)
+    else
+        local tex = ArcAuras.GetIconOverride(arcID)
+        if tex then frame.Icon:SetTexture(tex) end
+    end
+end
+
+-- Resolve a user-entered source ID to a texture: spell first, then item.
+function ArcAuras.ResolveOverrideSource(overrideID)
+    local spellInfo = C_Spell.GetSpellInfo(overrideID)
+    if spellInfo and (spellInfo.iconID or spellInfo.originalIconID) then
+        return spellInfo.iconID or spellInfo.originalIconID, spellInfo.name
+    end
+    if C_Item and C_Item.GetItemIconByID then
+        local itemIcon = C_Item.GetItemIconByID(overrideID)
+        if itemIcon then
+            return itemIcon,
+                (C_Item.GetItemNameByID and C_Item.GetItemNameByID(overrideID))
+                or ("Item " .. tostring(overrideID))
+        end
+    end
+    return nil
+end
+
+-- THE one override WRITER, for every Arc icon kind.
+-- overrideID nil or <= 0 clears. Returns true when the store changed.
+--
+-- TIMERS take an already-resolved texture FileDataID (the options dispatcher
+-- resolves a declared Spell/Item source before calling); every other kind
+-- takes a SOURCE id and resolves it here.
+function ArcAuras.SetIconOverride(arcID, overrideID)
+    if type(arcID) ~= "string" then return false end
+    local db = GetDB()
+    if not db then return false end
+
+    if arcID:match("^arc_totem_") then
+        -- totem slots render the totem's own art; there is no override store.
+        -- Say so instead of failing silently.
+        print("|cff00CCFF[Arc Auras]|r Totem slots always show the totem's own icon and cannot be overridden.")
+        return false
+    end
+
+    local isTimer = arcID:match("^arc_timer_") ~= nil
+    local isAura  = arcID:match("^arc_aura_") ~= nil
+
+    local config
+    if arcID:match("^arc_spell_") then
+        config = db.trackedSpells and db.trackedSpells[arcID]
+    elseif isTimer then
+        config = db.customTimers and db.customTimers[arcID]
+    elseif isAura then
+        config = db.auraIcons and db.auraIcons[arcID]
+    else
+        config = db.trackedItems and db.trackedItems[arcID]
+    end
+    if not config then return false end
+
+    local n = tonumber(overrideID)
+
+    -- CLEAR ---------------------------------------------------------------
+    if not n or n <= 0 then
+        config.iconOverride, config.iconOverrideID = nil, nil
+        if isTimer then config.icon, config.iconID = nil, nil end
+        -- keep the stored source art current: catalog rows read
+        -- (iconOverride or icon), so a stale .icon would show the old art
+        if not isTimer and config.spellID then
+            local info = C_Spell.GetSpellInfo(config.spellID)
+            if info then config.icon = info.iconID or info.originalIconID or config.icon end
+        end
+        ArcAuras.RepaintIcon(arcID)
+        print("|cff00CCFF[Arc Auras]|r Icon reset to default for " .. (config.name or arcID))
+        return true
+    end
+
+    -- SET -----------------------------------------------------------------
+    if isTimer then
+        -- already a texture FileDataID. An invalid one renders as the missing
+        -- texture, which is the clearest possible feedback.
+        config.icon, config.iconID = n, n
+        config.iconOverride, config.iconOverrideID = n, n
+        ArcAuras.RepaintIcon(arcID)
+        print(string.format("|cff00CCFF[Arc Auras]|r Timer icon -> FileID %d", n))
+        return true
+    end
+
+    local newIcon, sourceName = ArcAuras.ResolveOverrideSource(n)
+    if not newIcon then
+        print("|cff00CCFF[Arc Auras]|r Could not find icon for ID " .. tostring(n))
+        return false
+    end
+
+    config.iconOverride, config.iconOverrideID = newIcon, n
+    ArcAuras.RepaintIcon(arcID)
+    print(string.format("|cff00CCFF[Arc Auras]|r Icon changed to %s (%d) for %s",
+        sourceName or "?", n, config.name or arcID))
+    return true
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -2525,18 +2783,40 @@ function ArcAuras.ApplySettingsToFrame(arcID, frame)
         for groupName, group in pairs(ns.CDMGroups.groups) do
             if group.members and group.members[arcID] then
                 inGroup = true
-                -- Use group's slot dimensions (respects group iconSize/width/height)
-                if ns.CDMGroups.GetSlotDimensions then
-                    width, height = ns.CDMGroups.GetSlotDimensions(group.layout)
+                -- ONE SIZE AUTHORITY (panel-close border bleed + the 79.0 vs
+                -- 79.2px drag mismatch): the number every CDM frame in the
+                -- group is ACTUALLY sized to is frame._cdmgSlotW/H — Layout's
+                -- SetupFrameInContainer pixel-snaps the slot to the physical
+                -- grid (44 ui -> 43.8888 = exactly 79px) before SetSize and
+                -- stores it there. member._effectiveIconW holds the RAW slot
+                -- (44 = 79.2px); preferring it made arc frames 0.2px wider
+                -- than their CDM neighbors after every post-drag apply
+                -- (/afi group verdict-proven). Snapped slot FIRST, raw
+                -- effective size as fallback, raw GetSlotDimensions only for
+                -- the never-laid-out case. Per-icon overrides (useGroupScale
+                -- OFF) replicate Layout's own override math instead, so they
+                -- are not stomped to slot size.
+                local m = group.members[arcID]
+                if cfg.useGroupScale == false then
+                    local s = cfg.scale or 1.0
+                    width  = (cfg.width  or frame._cdmgSlotW or 44) * s
+                    height = (cfg.height or frame._cdmgSlotH or 44) * s
                 else
-                    -- Fallback: calculate manually
-                    local baseScale = 36
-                    local iconSize = group.layout.iconSize or 36
-                    local iconWidth = group.layout.iconWidth or 36
-                    local iconHeight = group.layout.iconHeight or 36
-                    local scale = iconSize / baseScale
-                    width = iconWidth * scale
-                    height = iconHeight * scale
+                    width  = frame._cdmgSlotW or (m and m._effectiveIconW)
+                    height = frame._cdmgSlotH or (m and m._effectiveIconH)
+                end
+                if not width or not height then
+                    if ns.CDMGroups.GetSlotDimensions then
+                        width, height = ns.CDMGroups.GetSlotDimensions(group.layout)
+                    else
+                        local baseScale = 36
+                        local iconSize = group.layout.iconSize or 36
+                        local iconWidth = group.layout.iconWidth or 36
+                        local iconHeight = group.layout.iconHeight or 36
+                        local scale = iconSize / baseScale
+                        width = iconWidth * scale
+                        height = iconHeight * scale
+                    end
                 end
                 break
             end
@@ -2840,6 +3120,27 @@ function ArcAuras.ShowTooltip(frame)
             GameTooltip:AddLine(config.name or "Custom Timer", 1, 1, 1)
         end
         GameTooltip:AddLine("|cffFFCC00Custom Timer|r", 1, 0.8, 0)
+    else
+        -- AURA ICONS (arc_aura_<spellID>) and anything else without a typed
+        -- config: show the real SPELL tooltip. Without this the holder fell
+        -- through every branch and rendered only the "Arc Auras" header + the
+        -- ID readout — visible whenever the engine button is hidden, i.e. the
+        -- aura-missing GHOST state (while the aura is up the engine button
+        -- covers the holder and Blizzard's own aura tooltip shows instead).
+        -- The spellID is carried by the arcID; fall back to stored config.
+        local spellID = config.spellID
+        if not spellID then
+            local arcID = frame._arcAuraID or frame._arcCooldownID
+            if type(arcID) == "string" then
+                -- unanchored: copies are keyed arc_aura_<id>_2, _3, ...
+                spellID = tonumber(arcID:match("^arc_aura_(%d+)"))
+            end
+        end
+        if spellID then
+            GameTooltip:SetSpellByID(spellID)
+        elseif config.name then
+            GameTooltip:AddLine(config.name, 1, 1, 1)
+        end
     end
     
     GameTooltip:AddLine(" ")
@@ -2873,7 +3174,6 @@ function ArcAuras.ShowTooltip(frame)
         end
     end
     
-    GameTooltip:AddLine("Right-click for options", 0.7, 0.7, 0.7)
     
     if frame._isOnCooldown and frame._remaining then
         GameTooltip:AddLine(string.format("Cooldown: %.1fs", frame._remaining), 1, 0.8, 0)
@@ -2949,14 +3249,13 @@ StaticPopupDialogs["ARCAURAS_ICON_OVERRIDE"] = {
     timeout = 0, whileDead = true, hideOnEscape = true,
 }
 
+-- THE one picker, for every Arc icon kind. There used to be a second,
+-- byte-identical copy in ArcAurasCooldown with its own popup; the only
+-- difference was which store it prefilled from, which GetIconOverrideID now
+-- knows for all of them.
 function ArcAuras.ShowIconOverridePicker(arcID, frame)
-    local db = GetDB()
-    if not db then return end
-    
-    -- Find config in either trackedItems or trackedTrinkets
-    local config = db.trackedItems and db.trackedItems[arcID]
-    local currentOverrideID = config and config.iconOverrideID or nil
-    
+    local currentOverrideID = ArcAuras.GetIconOverrideID(arcID)
+
     local dialog = StaticPopup_Show("ARCAURAS_ICON_OVERRIDE")
     if dialog then
         dialog.data = { arcID = arcID, currentOverrideID = currentOverrideID }
@@ -2967,58 +3266,10 @@ function ArcAuras.ShowIconOverridePicker(arcID, frame)
     end
 end
 
+-- Public entry point kept for existing callers; the implementation is the
+-- shared writer above (was a near-duplicate of the spell and timer versions).
 function ArcAuras.ApplyIconOverride(arcID, overrideID)
-    local db = GetDB()
-    if not db then return end
-    
-    local config = db.trackedItems and db.trackedItems[arcID]
-    if not config then return end
-    
-    -- Reset if 0 or nil
-    if not overrideID or overrideID <= 0 then
-        config.iconOverride = nil
-        config.iconOverrideID = nil
-        -- Restore original icon
-        local frame = ArcAuras.frames and ArcAuras.frames[arcID]
-        if frame then
-            ArcAuras.SetFrameIcon(frame, config)
-        end
-        print("|cff00CCFF[Arc Auras]|r Icon reset to default for " .. (config.name or arcID))
-        return
-    end
-    
-    -- Try as spell ID first, then item ID
-    local newIcon, sourceName = nil, nil
-    
-    local spellInfo = C_Spell.GetSpellInfo(overrideID)
-    if spellInfo and (spellInfo.iconID or spellInfo.originalIconID) then
-        newIcon = spellInfo.iconID or spellInfo.originalIconID
-        sourceName = spellInfo.name
-    end
-    
-    if not newIcon then
-        local itemIcon = C_Item.GetItemIconByID(overrideID)
-        if itemIcon then
-            newIcon = itemIcon
-            sourceName = C_Item.GetItemNameByID(overrideID) or ("Item " .. overrideID)
-        end
-    end
-    
-    if not newIcon then
-        print("|cff00CCFF[Arc Auras]|r Could not find icon for ID " .. overrideID)
-        return
-    end
-    
-    config.iconOverride = newIcon
-    config.iconOverrideID = overrideID
-    
-    local frame = ArcAuras.frames and ArcAuras.frames[arcID]
-    if frame and frame.Icon then
-        frame.Icon:SetTexture(newIcon)
-    end
-    
-    print(string.format("|cff00CCFF[Arc Auras]|r Icon changed to %s (%d) for %s",
-        sourceName or "?", overrideID, config.name or arcID))
+    return ArcAuras.SetIconOverride(arcID, overrideID)
 end
 
 function ArcAuras.ResetFramePosition(arcID)
@@ -3157,6 +3408,15 @@ function ArcAuras.RemoveTrackedItem(arcID)
     if not db or not db.trackedItems then return end
     
     if db.trackedItems[arcID] then
+        -- DELETING AN AUTO-TRACKED SLOT ICON MUST DISABLE THE SLOT. Otherwise the
+        -- auto-track pass recreates it on the next login and the delete was a
+        -- no-op -- the "icons keep coming back after I delete them" report.
+        -- Deleting the icon IS the instruction to stop tracking that slot.
+        local cfg = db.trackedItems[arcID]
+        if cfg.isAutoTrackSlot and cfg.slotID and db.autoTrackSlots then
+            db.autoTrackSlots[cfg.slotID] = nil
+        end
+
         db.trackedItems[arcID] = nil
         ArcAuras.DestroyFrame(arcID)
         
@@ -3981,6 +4241,30 @@ end
 -- Diffs existing frames vs current char DB: creates missing, destroys removed.
 -- Does NOT destroy-all/recreate-all. Frames that already exist survive.
 -- ═══════════════════════════════════════════════════════════════════════════
+-- ENGINE-OWNED FRAMES: aura icons, custom timers and totems keep their configs in
+-- their OWN stores (db.auraIcons / db.customTimers / db.totemSlots), never in
+-- trackedItems or trackedSpells. The two sync functions below each decide
+-- "untracked, destroy it" from a SINGLE store, and between them their tests cover
+-- every frame: SyncToProfile destroys what is NOT _arcIsSpellCooldown,
+-- SyncSpellFrames destroys what IS. Aura icons fell in the first net; TOTEMS fall
+-- in the second, because they deliberately borrow the spell visual path and set
+-- _arcIsSpellCooldown = true while living in db.totemSlots.
+-- Both proven by lifecycle traces during a shared-profile Pull: correct state
+-- restored, then Hide + ClearAllPoints + SetParent(nil) milliseconds later.
+-- ONE shared predicate so the two can never drift again.
+local function IsEngineOwnedFrame(arcID, frame)
+    if frame and (frame._arcIsCustomTimer or frame._arcIsAuraIcon or frame._arcIsCustomTotem) then
+        return true
+    end
+    if type(arcID) == "string" then
+        if arcID:match("^arc_aura_") or arcID:match("^arc_timer_")
+           or arcID:match("^arc_totem_") then
+            return true
+        end
+    end
+    return false
+end
+
 function ArcAuras.SyncToProfile()
     if not ArcAuras.isEnabled then return end
     local db = GetDB()
@@ -3994,10 +4278,25 @@ function ArcAuras.SyncToProfile()
     -- NOTE: spells are discovered by ArcAurasCooldown timer, not synced here
 
     -- Destroy frames no longer tracked
+    --
+    -- ENGINE-OWNED FRAMES ARE NOT ITEMS. `shouldExist` is built from
+    -- db.trackedItems ALONE, but aura icons live in db.auraIcons, custom timers
+    -- in db.customTimers and totems in db.totemSlots. Those holders are never in
+    -- trackedItems, and only totems carry _arcIsSpellCooldown -- so aura icons
+    -- and timers failed BOTH tests and got DESTROYED here on every call. Proven
+    -- by a lifecycle trace: the shared pull restored the correct position
+    -- (TrackFreeIcon x=-351.7 y=250.8) and 0.00s later this loop ran Hide +
+    -- ClearAllPoints + SetParent(nil) on the same frame. That is the "icons show
+    -- for a second on the alt then vanish", and why a reload looked fine (no
+    -- pull, so SyncToProfile never ran).
+    -- Same defect and same exemption list as the RefreshVisibility
+    -- missing-config branch fixed earlier -- this copy never got it.
     local toDestroy = {}
     for arcID, frame in pairs(ArcAuras.frames) do
-        -- Only check item/trinket frames (spells managed by ArcAurasCooldown)
-        if not frame._arcIsSpellCooldown and not shouldExist[arcID] then
+        -- Only check item/trinket frames (spells managed by ArcAurasCooldown,
+        -- aura icons / timers / totems by their own modules)
+        if not frame._arcIsSpellCooldown and not shouldExist[arcID]
+           and not IsEngineOwnedFrame(arcID, frame) then
             table.insert(toDestroy, arcID)
         end
     end
@@ -4047,7 +4346,10 @@ function ArcAuras.SyncSpellFrames()
     -- Destroy spell frames no longer tracked
     local toDestroy = {}
     for arcID, frame in pairs(ArcAuras.frames) do
-        if frame._arcIsSpellCooldown and not shouldExist[arcID] then
+        -- TOTEMS set _arcIsSpellCooldown but live in db.totemSlots, so they match
+        -- this test and were destroyed on every pull. See IsEngineOwnedFrame.
+        if frame._arcIsSpellCooldown and not shouldExist[arcID]
+           and not IsEngineOwnedFrame(arcID, frame) then
             toDestroy[#toDestroy + 1] = arcID
         end
     end
@@ -4082,6 +4384,18 @@ function ArcAuras.SyncAfterSharedPull()
     if not ArcAuras.isEnabled then return end
     ArcAuras.SyncToProfile()    -- items
     ArcAuras.SyncSpellFrames()  -- spells
+    -- DELIBERATELY NOT rebuilding aura icons / timers / totems here.
+    -- The pull replaces those stores on disk, and a rebuild looks like the
+    -- obvious follow-up, but every one of those entry points re-evaluates
+    -- visibility and TEARS DOWN anything that fails: AuraIcons.RefreshVisibility
+    -- calls TeardownIcon whenever ShouldBeVisible is false, and it would be
+    -- judging the SOURCE's freshly-copied showOnSpecs / talentConditions
+    -- against this character -- with GetSpecialization() not necessarily
+    -- resolved yet during the login pull. In game that deleted live aura icons
+    -- on every manual pull while the stored data was perfectly fine, which is
+    -- why a reload afterwards looked correct.
+    -- The stores are on disk; the normal login build picks them up. A pull must
+    -- never destroy frames, so it does not touch them at all.
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -4151,8 +4465,20 @@ function ArcAuras.RefreshVisibility()
 
         if not config then
             -- Frame exists but config missing — hide but don't destroy
-            -- (SyncToProfile handles destruction, this is visibility-only)
-            frame:Hide()
+            -- (SyncToProfile handles destruction, this is visibility-only).
+            -- TIMERS / TOTEMS / AURA HOLDERS: their configs live in their OWN
+            -- stores, never in trackedSpells/trackedItems — this lookup
+            -- ALWAYS misses for them, and the unconditional Hide here blinked
+            -- every such icon on every RefreshVisibility while the group
+            -- maintenance re-showed it ~15ms later (the in-combat flicker;
+            -- timeline-proven: Hide@here vs Maintain:372 Show, repeating).
+            -- Their engines own their visibility — never touch them here.
+            local engineOwned = frame._arcIsCustomTimer or frame._arcIsAuraIcon
+                or (type(arcID) == "string" and (arcID:match("^arc_timer_")
+                    or arcID:match("^arc_totem_") or arcID:match("^arc_aura_")))
+            if not engineOwned then
+                frame:Hide()
+            end
         else
             local shouldDestroy = false
             local shouldHide = false
@@ -5471,12 +5797,7 @@ function ArcAuras.CreateCatalogEntry(cdID, frame)
             name = info.name
             icon = info.iconID or info.originalIconID
         end
-        -- Icon override from trackedSpells
-        local db = GetDB()
-        local trackedCfg = db and db.trackedSpells and db.trackedSpells[cdID]
-        if trackedCfg and trackedCfg.iconOverride then
-            icon = trackedCfg.iconOverride
-        end
+        icon = ArcAuras.GetIconOverride(cdID) or icon
         name = name or ("Spell " .. spellID)
     elseif arcType == "timer" and id then
         -- Custom timer frame — icon and name come from the watched spell,
@@ -5487,11 +5808,7 @@ function ArcAuras.CreateCatalogEntry(cdID, frame)
             name = info.name
             icon = info.iconID or info.originalIconID
         end
-        local db = GetDB()
-        local timerCfg = db and db.customTimers and db.customTimers[cdID]
-        if timerCfg and timerCfg.icon then
-            icon = timerCfg.icon
-        end
+        icon = ArcAuras.GetIconOverride(cdID) or icon
         name = (name or ("Spell " .. spellID)) .. " |cff888888(Timer)|r"
     elseif arcType == "totem" and id then
         -- Totem-slot frame. The live totem icon is a SECRET fileID (we SetTexture
@@ -5506,7 +5823,7 @@ function ArcAuras.CreateCatalogEntry(cdID, frame)
         local auraDef = db and db.auraIcons and db.auraIcons[cdID]
         if auraDef then
             name = auraDef.name
-            icon = auraDef.iconOverride or auraDef.icon
+            icon = ArcAuras.GetIconOverride(cdID) or auraDef.icon
         else
             local info = C_Spell.GetSpellInfo(spellID)
             if info then
