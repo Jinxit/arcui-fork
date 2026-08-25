@@ -3203,6 +3203,12 @@ end
 -- TOOLTIP SPELL/ITEM ID DISPLAY
 -- ===================================================================
 local function IsTooltipEnabled()
+    -- The global "Show IDs on Hover" toggle covers the same tooltips (and
+    -- more), so it wins outright -- otherwise both features would print an ID
+    -- line on every spell and item tooltip.
+    if ns.IconIDs and ns.IconIDs.IsEnabled and ns.IconIDs.IsEnabled() then
+        return false
+    end
     local db = GetDB()
     return db and db.showSpellIDsInTooltips == true
 end
@@ -3274,11 +3280,17 @@ end
 local function RegisterTooltipHooks()
     local function OnSpellTooltip(tooltip, data)
         if not IsTooltipEnabled() then return end
+        -- 12.1: post-calls also fire for PROTECTED tooltips (the UI-widget
+        -- EmbeddedItemTooltip on scenario/affix spell displays) — ANY touch
+        -- from addon code throws "attempt to access forbidden object".
+        -- IsForbidden is the sanctioned probe (callable on forbidden frames).
+        if not tooltip or (tooltip.IsForbidden and tooltip:IsForbidden()) then return end
         local spellID = TryGetSpellIDFromTooltip(tooltip, data)
         if spellID then AddSpellIdLine(tooltip, spellID) end
     end
     local function OnItemTooltip(tooltip, data)
         if not IsTooltipEnabled() then return end
+        if not tooltip or (tooltip.IsForbidden and tooltip:IsForbidden()) then return end
         local itemID = TryGetItemIDFromTooltip(tooltip)
         if itemID then AddItemIdLine(tooltip, itemID) end  -- AddItemIdLine guards
     end

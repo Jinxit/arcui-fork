@@ -396,6 +396,11 @@ function AF.UpdateAuraFrame(frame)
   local currentAuraActive = HasAuraInstanceID(frame.auraInstanceID)
                          or (ns.FrameActive and ns.FrameActive.IsActive(frame)) or false
   local cdID          = frame.cooldownID
+  -- tracer: log only TRANSITIONS (this runs per aura event; steady state is noise)
+  if ns.TraceTap and lastAuraActive ~= currentAuraActive then
+    ns.TraceTap("AF", string.format("cd=%s visualAuraActive %s -> %s",
+      tostring(cdID), tostring(lastAuraActive), tostring(currentAuraActive)))
+  end
 
   local hasDelay = frame._arcDelayAlphaUntil and now < frame._arcDelayAlphaUntil
   if ns.DynamicLayoutDebug and ns.DynamicLayoutDebug.IsAlphaTraceEnabled
@@ -437,6 +442,43 @@ function AF.UpdateAuraFrame(frame)
       if frame._arcAuraActiveGlowActive then AF.HideAuraActiveGlow(frame) end
       if ns.CustomLabel and ns.CustomLabel.UpdateVisibility then
         ns.CustomLabel.UpdateVisibility(frame)
+      end
+      -- ASSERT SATURATION BEFORE BAILING (PURE AURA frames only).
+      -- ArcUI is the ONLY thing that desaturates an aura icon; CDM never
+      -- does. So "Aura Missing -> Desaturate off" has to be actively
+      -- asserted, not merely not-added: skipping here left any stale desat
+      -- in place (a frame rebound from a cooldown icon, a leftover from a
+      -- previous state), and it survived until the options panel forced a
+      -- refresh -- which is exactly why opening the panel "fixed" it.
+      --
+      -- stateVisuals == nil PROVES the Aura Missing desaturate is off:
+      -- GetEffectiveStateVisuals returns a table whenever cs.desaturate ==
+      -- true, so reaching here means it is false. Target is therefore 0.
+      --
+      -- _isAura gate: COOLDOWN frames with wasSetFromAura route through this
+      -- function too (RefreshAllStyles / panel sweeps), and their desat can
+      -- legitimately be held at 1 by CooldownState's "Desaturate When Aura
+      -- Inactive" (auraActiveState.desaturateWhenInactive -- NOT part of the
+      -- stateVisuals detector). Asserting 0 on those would fight that writer.
+      -- Their stale desat self-heals through CooldownState.Apply anyway; only
+      -- pure aura frames had no other desat writer, which is why only they
+      -- ever stuck grey.
+      --
+      -- No default-look change: on an icon that was never wrongly
+      -- desaturated this is a no-op write.
+      local tex = (cfg and cfg._isAura) and (frame.Icon or frame.icon) or nil
+      if tex and not tex.SetDesaturation and tex.Icon then tex = tex.Icon end
+      if tex and frame._arcTargetDesat ~= 0 then
+        frame._arcForceDesatValue = nil
+        frame._arcTargetDesat     = 0
+        frame._arcBypassDesatHook = true
+        if tex.SetDesaturation then
+          tex:SetDesaturation(0)
+        elseif tex.SetDesaturated then
+          tex:SetDesaturated(false)
+        end
+        frame._arcBypassDesatHook = false
+        ApplyBorderDesaturation(frame, 0)
       end
       return
     end
@@ -634,7 +676,14 @@ function AF.UpdateAuraFrame(frame)
         HideReadyGlow(frame)
       end
       frame._arcTargetGlow = true
-    elseif threshold >= 1.0 and not stateVisuals.glowThresholdSeconds then
+    elseif (threshold >= 1.0 and not stateVisuals.glowThresholdSeconds)
+        or (ns.API and ns.API.IS_121) then
+      -- 12.1: aura remaining-duration reads are walled, so the threshold
+      -- ticker can never evaluate — saved % / seconds thresholds collapse to
+      -- plain aura-active glow HERE (event-driven show/hide, no dead 0.5s
+      -- ticker burning cycles to reach the same fallback). The aura options
+      -- panel hides the threshold modes on 12.1 and says why; CDM Pandemic
+      -- Timing (the branch above) still works — it is Blizzard-driven.
       if ShouldShowReadyGlow(stateVisuals, frame) and isReadyOrPreview then
         ShowReadyGlow(frame, stateVisuals)
       else
@@ -733,6 +782,35 @@ function AF.InstallHooks(frame, cdID)
           self._arcDelayAlphaUntil = GetTime() + 0.05  -- 50ms ceiling; Layout fires next frame (~16ms) and clears it
           break
         end
+      end
+    end
+
+    -- PANDEMIC FLAG RELEASE (aura gone => no pandemic window, by definition).
+    -- This MUST live here, not only on Blizzard's HidePandemicStateFrame hook.
+    -- CDM only calls CheckPandemicTimeDisplay (the sole caller of Show/Hide
+    -- PandemicStateFrame) from its per-frame OnUpdate, and
+    -- NeedsOnUpdateRegistration() is `pandemicAlertTriggerTime or next(alertsByEvent)`.
+    -- Blizzard nils pandemicAlertTriggerTime the moment the alert PLAYS
+    -- ("Just clear the alert state once it plays") and re-runs
+    -- RefreshOnUpdateRegistration -> the frame is UNREGISTERED from OnUpdate
+    -- while the glow is still up. So HidePandemicStateFrame never fires again
+    -- and PandemicGlowKill -- previously the ONLY clearer of this flag -- never
+    -- ran: the glow stayed until an unrelated refresh (target swap ->
+    -- OnNewTarget -> RefreshData) happened to clear it. That is the reported
+    -- "pandemic glow doesn't go away until I stop looking at the target".
+    -- Clearing is UNCONDITIONAL on config on purpose: every SETTER is gated on
+    -- glowFollowPandemic, so a gated clear strands the flag forever when the
+    -- user turns that option off (observed live: _arcPandemicGlowActive=true
+    -- with glowFollowPandemic=false). A stranded true is not inert -- it
+    -- suppresses HideAuraActiveGlow in the guards here and in CooldownState.
+    -- Hiding stays config-gated inside ClearPandemicGlow; only the flag is
+    -- released here, before the glow decision below re-derives from live state.
+    if not isActive and self._arcPandemicGlowActive then
+      if ns.CDMEnhance and ns.CDMEnhance.ClearPandemicGlow then
+        ns.CDMEnhance.ClearPandemicGlow(self)
+      else
+        self._arcPandemicGlowActive = nil
+        self._arcPandemicLastFire   = nil
       end
     end
 
@@ -1012,7 +1090,12 @@ end
 -- cdID stays the same key and entry. CDM never destroys frames in the
 -- pool, just releases them.
 -- ═══════════════════════════════════════════════════════════════════════════
-if ns.FrameController and ns.FrameController.OnFrameRebind then
+-- DEFERRED to ADDON_LOADED: ns.FrameController does not exist yet when this
+-- file loads (FrameController is toc line 116, this file is 99), so the old
+-- file-scope `if ns.FrameController` guard silently skipped registration and
+-- this subscriber NEVER ran. Same boot pattern as ArcUI_FrameActive.lua.
+local function InstallAFRebindHandler()
+  if not (ns.FrameController and ns.FrameController.OnFrameRebind) then return end
   ns.FrameController.OnFrameRebind(function(frame, oldCdID, newCdID)
     if not frame then return end
     -- Both bind (newCdID set) and release (newCdID nil) need cache nilling
@@ -1023,8 +1106,27 @@ if ns.FrameController and ns.FrameController.OnFrameRebind then
     frame._arcLastOptimizedCall      = nil
     frame._arcLastAuraActive         = nil
     frame._arcPandemicGlowActive     = nil
+    -- DESAT AUTHORITY must not be inherited across a rebind. CDM rebinds
+    -- pooled frames across cooldownIDs on every RefreshLayout (portal / zone
+    -- change / spec swap), so a frame that was a COOLDOWN icon arrives at an
+    -- aura cooldownID still carrying _arcForceDesatValue = 1 and a grey
+    -- texture. Nothing else cleared it (the enforcement hook's staleness
+    -- sweep only releases forceValue == 0, so a stale 1 is pinned), and the
+    -- aura path below used to skip the desat write entirely, so the icon
+    -- stayed grey until the options panel forced a refresh. Which pooled
+    -- frame landed on which cooldownID is why it only happened sometimes.
+    frame._arcForceDesatValue        = nil
   end)
 end
+
+local afRebindBoot = CreateFrame("Frame")
+afRebindBoot:RegisterEvent("ADDON_LOADED")
+afRebindBoot:SetScript("OnEvent", function(self, event, addon)
+  if addon == ADDON then
+    InstallAFRebindHandler()
+    self:UnregisterEvent("ADDON_LOADED")
+  end
+end)
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- FULL-UPDATE VISUAL SWEEP (RefreshLayout hook)
