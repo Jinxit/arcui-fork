@@ -1,6 +1,6 @@
 -- ===================================================================
--- ArcUI_FocusCastbar.lua
--- Castbar tracking what the focus target is casting.
+-- ArcUI_TargetCastbar.lua
+-- Castbar tracking what the target is casting.
 -- Uses the WoW 12.0 duration-object model: the StatusBar knows its own
 -- end time and fills itself, so OnUpdate only reads state.
 -- Zero idle CPU: all timers/OnUpdate only run during an active cast
@@ -8,12 +8,12 @@
 -- ===================================================================
 
 local ADDON, ns = ...
-ns.FocusCastbar = ns.FocusCastbar or {}
-local FC = ns.FocusCastbar
+ns.TargetCastbar = ns.TargetCastbar or {}
+local FC = ns.TargetCastbar
 
 local LSM          = LibStub and LibStub("LibSharedMedia-3.0", true)
-local GLOW_KEY     = "_arcFCastGlow"
-local IMP_GLOW_KEY = "_arcFCastImpGlow"
+local GLOW_KEY     = "_arcTCastGlow"
+local IMP_GLOW_KEY = "_arcTCastImpGlow"
 
 local FALLBACK_ICON     = 136243
 local INTERRUPTED       = "Interrupted"
@@ -95,7 +95,7 @@ local UpdateKickAndColor
 -- DB
 -- ===================================================================
 local function GetDB()
-    return ns.db and ns.db.char and ns.db.char.focusCastbar
+    return ns.db and ns.db.char and ns.db.char.targetCastbar
 end
 
 -- ===================================================================
@@ -200,7 +200,7 @@ local function SetupKickBar(cfg)
     local kc = cfg.kickTickColor or {r=1,g=1,b=1,a=1}
     mainFrame.kickTick:SetColorTexture(kc.r, kc.g, kc.b, kc.a or 1)
 
-    -- total is a SECRET number for focus casts — safe to pass to SetMinMaxValues,
+    -- total is a SECRET number for target casts — safe to pass to SetMinMaxValues,
     -- never to compare. SetMinMaxValues accepts secrets as a safe sink.
     local total = duration:GetTotalDuration()
 
@@ -253,7 +253,7 @@ UpdateKickAndColor = function(cfg)
 end
 
 -- Advance the positioner (kick-tick anchor) from the live duration object.
--- GetElapsedDuration is a SECRET number for focus casts; SetValue is a safe sink.
+-- GetElapsedDuration is a SECRET number for target casts; SetValue is a safe sink.
 local function UpdateTickPosition(cfg, duration)
     if not (cfg.kickEnabled and interruptId) then return end
     mainFrame.positioner:SetValue(duration:GetElapsedDuration())
@@ -432,7 +432,7 @@ local function ApplyRaidMarkerSettings()
     mainFrame._raidMarker:SetPoint(anchor, mainFrame, anchor, offsetX, offsetY)
 end
 
--- showDefault: when no focus marker exists, show raidMarkerDefault (for preview/edit)
+-- showDefault: when no target marker exists, show raidMarkerDefault (for preview/edit)
 local function UpdateRaidMarker(showDefault)
     if not mainFrame then return end
     local cfg = GetDB()
@@ -441,7 +441,7 @@ local function UpdateRaidMarker(showDefault)
         return
     end
     ApplyRaidMarkerSettings()
-    local idx = GetRaidTargetIndex("focus")
+    local idx = GetRaidTargetIndex("target")
     if idx then
         ---@diagnostic disable-next-line: undefined-global
         SetRaidTargetIconTexture(mainFrame._raidMarker, idx)
@@ -519,14 +519,14 @@ end
 -- ===================================================================
 -- FRAME CREATION
 -- ===================================================================
-local function CreateFocusFrames()
+local function CreateTargetFrames()
     if mainFrame then return end
     local cfg = GetDB()
     if not cfg then return end
     local w = cfg.width  or 220
     local h = cfg.height or 18
 
-    local frame = CreateFrame("Frame", "ArcUIFocusCastbarMain", UIParent)
+    local frame = CreateFrame("Frame", "ArcUITargetCastbarMain", UIParent)
     frame:SetSize(w, h)
     frame:SetMovable(true)
     frame:SetClampedToScreen(true)
@@ -620,8 +620,8 @@ local function CreateFocusFrames()
     frame._raidMarker:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcons")
     frame._raidMarker:Hide()
 
-    -- Text layer (spell name + timer + caster name + focus target)
-    local textF = CreateFrame("Frame", "ArcUIFocusCastbarText", UIParent)
+    -- Text layer (spell name + timer + caster name + target)
+    local textF = CreateFrame("Frame", "ArcUITargetCastbarText", UIParent)
     textF:SetFrameStrata("HIGH")
     textF:SetFrameLevel(200)
     textF:SetSize(w, h)
@@ -641,12 +641,12 @@ local function CreateFocusFrames()
     textF.casterText:SetPoint("TOPRIGHT", frame, "BOTTOMRIGHT", 0, -2)
     textF.casterText:SetJustifyH("RIGHT")
     textF.casterText:SetJustifyV("TOP")
-    textF.focusTargetText = textF:CreateFontString(nil, "OVERLAY")
-    textF.focusTargetText:SetPoint("TOPLEFT",  frame, "BOTTOMLEFT",  0, -14)
-    textF.focusTargetText:SetPoint("TOPRIGHT", frame, "BOTTOMRIGHT", 0, -14)
-    textF.focusTargetText:SetJustifyH("RIGHT")
-    textF.focusTargetText:SetJustifyV("TOP")
-    textF.focusTargetText:Hide()
+    textF.targetTargetText = textF:CreateFontString(nil, "OVERLAY")
+    textF.targetTargetText:SetPoint("TOPLEFT",  frame, "BOTTOMLEFT",  0, -14)
+    textF.targetTargetText:SetPoint("TOPRIGHT", frame, "BOTTOMRIGHT", 0, -14)
+    textF.targetTargetText:SetJustifyH("RIGHT")
+    textF.targetTargetText:SetJustifyV("TOP")
+    textF.targetTargetText:Hide()
     frame._textFrame = textF
 
     -- Drag handle button (visible while options panel is open)
@@ -697,23 +697,23 @@ local function CreateFocusFrames()
 end
 
 -- ===================================================================
--- FOCUS TARGET TEXT  (who the focus is targeting during a cast)
+-- TARGET-OF-TARGET TEXT  (who the target is targeting during a cast)
 -- ===================================================================
-local function UpdateFocusTargetText()
+local function UpdateTargetTargetText()
     if not mainFrame or not mainFrame._textFrame then return end
     local textF = mainFrame._textFrame
-    if not textF.focusTargetText then return end
+    if not textF.targetTargetText then return end
     local cfg = GetDB()
-    if not (cfg and cfg.showFocusTarget and HasActiveCast()) then
-        textF.focusTargetText:Hide()
+    if not (cfg and cfg.showTargetTarget and HasActiveCast()) then
+        textF.targetTargetText:Hide()
         return
     end
-    local targetName = UnitName("focustarget")
-    textF.focusTargetText:SetText(targetName or "")
+    local targetName = UnitName("targettarget")
+    textF.targetTargetText:SetText(targetName or "")
     if targetName then
-        textF.focusTargetText:Show()
+        textF.targetTargetText:Show()
     else
-        textF.focusTargetText:Hide()
+        textF.targetTargetText:Hide()
     end
 end
 
@@ -755,21 +755,21 @@ local function ApplyAppearanceInternal(cfg)
             textF.casterText:SetPoint("TOPRIGHT", mainFrame, "BOTTOMRIGHT", cxo, -2 + cyo)
             textF.casterText:SetJustifyH("RIGHT")
         end
-        -- Focus target: anchor side + offset
-        if textF.focusTargetText then
-            textF.focusTargetText:ClearAllPoints()
-            local fxo   = cfg.focusTargetOffsetX or 0
-            local fyo   = cfg.focusTargetOffsetY or 0
-            local fAnch = cfg.focusTargetAnchor or "RIGHT"
+        -- Target target: anchor side + offset
+        if textF.targetTargetText then
+            textF.targetTargetText:ClearAllPoints()
+            local fxo   = cfg.targetTargetOffsetX or 0
+            local fyo   = cfg.targetTargetOffsetY or 0
+            local fAnch = cfg.targetTargetAnchor or "RIGHT"
             if fAnch == "LEFT" then
-                textF.focusTargetText:SetPoint("TOPLEFT",  mainFrame, "BOTTOMLEFT",  fxo, -14 + fyo)
-                textF.focusTargetText:SetJustifyH("LEFT")
+                textF.targetTargetText:SetPoint("TOPLEFT",  mainFrame, "BOTTOMLEFT",  fxo, -14 + fyo)
+                textF.targetTargetText:SetJustifyH("LEFT")
             elseif fAnch == "CENTER" then
-                textF.focusTargetText:SetPoint("TOP",      mainFrame, "BOTTOM",       fxo, -14 + fyo)
-                textF.focusTargetText:SetJustifyH("CENTER")
+                textF.targetTargetText:SetPoint("TOP",      mainFrame, "BOTTOM",       fxo, -14 + fyo)
+                textF.targetTargetText:SetJustifyH("CENTER")
             else
-                textF.focusTargetText:SetPoint("TOPRIGHT", mainFrame, "BOTTOMRIGHT",  fxo, -14 + fyo)
-                textF.focusTargetText:SetJustifyH("RIGHT")
+                textF.targetTargetText:SetPoint("TOPRIGHT", mainFrame, "BOTTOMRIGHT",  fxo, -14 + fyo)
+                textF.targetTargetText:SetJustifyH("RIGHT")
             end
         end
     end
@@ -815,16 +815,16 @@ local function ApplyAppearanceInternal(cfg)
         local cnc = cfg.casterNameColor or {r=1,g=0.82,b=0,a=1}
         textF.casterText:SetFont(fontPath, smallSize, outline)
         textF.casterText:SetTextColor(cnc.r, cnc.g, cnc.b, cnc.a or 1)
-        if textF.focusTargetText then
-            local ftc = cfg.focusTargetColor or {r=0.6,g=0.8,b=1,a=1}
-            textF.focusTargetText:SetFont(fontPath, smallSize, outline)
-            textF.focusTargetText:SetTextColor(ftc.r, ftc.g, ftc.b, ftc.a or 1)
+        if textF.targetTargetText then
+            local ftc = cfg.targetTargetColor or {r=0.6,g=0.8,b=1,a=1}
+            textF.targetTargetText:SetFont(fontPath, smallSize, outline)
+            textF.targetTargetText:SetTextColor(ftc.r, ftc.g, ftc.b, ftc.a or 1)
         end
     end
 
     ApplyRaidMarkerSettings()
     RebuildColorObjects(cfg)
-    UpdateFocusTargetText()
+    UpdateTargetTargetText()
 end
 
 function FC.ApplyAppearance()
@@ -974,7 +974,7 @@ local function OnUpdate(_, elapsed)
         end
     end
 
-    UpdateFocusTargetText()
+    UpdateTargetTargetText()
 end
 
 local function EnsureOnUpdate()
@@ -988,7 +988,7 @@ end
 -- duration object to the StatusBar (NorskenUI model)
 -- ===================================================================
 StartCast = function()
-    if not mainFrame or not UnitExists("focus") then return end
+    if not mainFrame or not UnitExists("target") then return end
     local cfg = GetDB()
     if not cfg or not cfg.enabled
        or (ns.API and ns.API.IsModuleEnabled and not ns.API.IsModuleEnabled("castbar")) then return end
@@ -998,21 +998,21 @@ StartCast = function()
     local direction = Enum.StatusBarTimerDirection.ElapsedTime
 
     -- Try regular cast first
-    name, text, texture, _, _, _, _, notInterruptible, spellID = UnitCastingInfo("focus")
+    name, text, texture, _, _, _, _, notInterruptible, spellID = UnitCastingInfo("target")
     if name then
         casting, channeling, empowering = true, nil, nil
-        duration = UnitCastingDuration("focus")
+        duration = UnitCastingDuration("target")
     else
         -- Try channel / empower
-        name, text, texture, _, _, _, notInterruptible, spellID, isEmpowered = UnitChannelInfo("focus")
+        name, text, texture, _, _, _, notInterruptible, spellID, isEmpowered = UnitChannelInfo("target")
         if name then
             casting = nil
             if isEmpowered then
                 empowering, channeling = true, nil
-                duration = UnitEmpoweredChannelDuration("focus")
+                duration = UnitEmpoweredChannelDuration("target")
             else
                 channeling, empowering = true, nil
-                duration = UnitChannelDuration("focus")
+                duration = UnitChannelDuration("target")
                 direction = Enum.StatusBarTimerDirection.RemainingTime
             end
         end
@@ -1065,11 +1065,11 @@ StartCast = function()
     local textF = mainFrame._textFrame
     if textF then
         textF.nameText:SetText(cfg.showSpellName   and (text or name) or "")
-        textF.casterText:SetText(cfg.showCasterName and UnitName("focus") or "")
+        textF.casterText:SetText(cfg.showCasterName and UnitName("target") or "")
         textF.timerText:SetText("")
         textF:Show()
     end
-    UpdateFocusTargetText()
+    UpdateTargetTargetText()
 
     -- Spark
     mainFrame.spark:Show()
@@ -1110,7 +1110,7 @@ EndCast = function(endReason, interruptedBy)
 
     mainFrame.spark:Hide()
     mainFrame.kickTick:SetAlpha(0)
-    UpdateFocusTargetText() -- will hide since HasActiveCast() about to be false
+    UpdateTargetTargetText() -- will hide since HasActiveCast() about to be false
     if ns.Glows then
         ns.Glows.Stop(mainFrame, GLOW_KEY)
         StopImportantGlowVisual()
@@ -1154,10 +1154,10 @@ local function UpdateInterruptible()
     if not HasActiveCast() or not mainFrame then return end
     local newNotInt
     if channeling or empowering then
-        local _,_,_,_,_,_, ni = UnitChannelInfo("focus")
+        local _,_,_,_,_,_, ni = UnitChannelInfo("target")
         newNotInt = ni
     else
-        local _,_,_,_,_,_,_, ni = UnitCastingInfo("focus")
+        local _,_,_,_,_,_,_, ni = UnitCastingInfo("target")
         newNotInt = ni
     end
     state_notInterruptible = newNotInt
@@ -1189,17 +1189,17 @@ end
 local function PreviewSetCastVisuals(cfg)
     local textF = mainFrame._textFrame
     if textF then
-        textF.nameText:SetText(cfg.showSpellName    and "Focus Castbar" or "")
+        textF.nameText:SetText(cfg.showSpellName    and "Target Castbar" or "")
         -- Placeholder text matches the option group names ("Caster Name" /
-        -- "Focus Target") so each color option maps 1:1 to the line it controls.
+        -- "Target of Target") so each color option maps 1:1 to the line it controls.
         textF.casterText:SetText(cfg.showCasterName and "Caster Name"   or "")
         textF.timerText:SetText("")
-        if textF.focusTargetText then
-            if cfg.showFocusTarget then
-                textF.focusTargetText:SetText("Focus Target")
-                textF.focusTargetText:Show()
+        if textF.targetTargetText then
+            if cfg.showTargetTarget then
+                textF.targetTargetText:SetText("Target of Target")
+                textF.targetTargetText:Show()
             else
-                textF.focusTargetText:Hide()
+                textF.targetTargetText:Hide()
             end
         end
         textF:Show()
@@ -1245,7 +1245,7 @@ local function PreviewShowInterrupted(cfg)
 
     local textF = mainFrame._textFrame
     if textF then
-        textF.nameText:SetText(INTERRUPTED_BY:format("Focus Target"))
+        textF.nameText:SetText(INTERRUPTED_BY:format("Target of Target"))
         textF.timerText:SetText("")
     end
 
@@ -1275,7 +1275,7 @@ function FC.ShowPreview()
     local nativeEM = EditModeManagerFrame and EditModeManagerFrame:IsShown()
     if not ns._arcUIOptionsOpen and not nativeEM then return end
 
-    CreateFocusFrames()
+    CreateTargetFrames()
     if not mainFrame then return end
     local cfg = GetDB()
     if not cfg or not cfg.enabled
@@ -1375,13 +1375,13 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
         return
     end
 
-    if event == "PLAYER_FOCUS_CHANGED" then
+    if event == "PLAYER_TARGET_CHANGED" then
         if ns._arcUIOptionsOpen then
             UpdateRaidMarker(true)
             return
         end
         CancelHoldTimer()
-        if UnitExists("focus") then
+        if UnitExists("target") then
             StartCast()
             UpdateRaidMarker(false)
         else
@@ -1392,12 +1392,12 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
 
     if event == "PLAYER_ENTERING_WORLD" then
         HideCast()
-        if UnitExists("focus") then StartCast() end
+        if UnitExists("target") then StartCast() end
         return
     end
 
-    -- Global RegisterEvent delivers unit="focus" for NPC focus targets.
-    if unit ~= "focus" then return end
+    -- Global RegisterEvent delivers unit="target" for NPC targets.
+    if unit ~= "target" then return end
 
     if event == "UNIT_SPELLCAST_START"
     or event == "UNIT_SPELLCAST_CHANNEL_START"
@@ -1436,7 +1436,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
         if channeling or empowering then StartCast() end
 
     elseif event == "UNIT_TARGET" then
-        UpdateFocusTargetText()
+        UpdateTargetTargetText()
 
     elseif event == "UNIT_SPELLCAST_INTERRUPTIBLE"
         or event == "UNIT_SPELLCAST_NOT_INTERRUPTIBLE" then
@@ -1450,19 +1450,19 @@ end)
 function FC.Enable()
     if isEnabled then return end
     isEnabled = true
-    CreateFocusFrames()
+    CreateTargetFrames()
     CacheInterruptId()
     FC.ApplyAppearance()
 
-    eventFrame:RegisterEvent("PLAYER_FOCUS_CHANGED")
+    eventFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
     eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
     eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
     eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
     eventFrame:RegisterEvent("LOADING_SCREEN_DISABLED")
     eventFrame:RegisterEvent("RAID_TARGET_UPDATE")
 
-    -- Global registration: RegisterUnitEvent("focus") does not reliably fire for
-    -- NPC focus targets in WoW 12.0; the handler filters on unit == "focus".
+    -- Global registration: RegisterUnitEvent("target") does not reliably fire for
+    -- NPC targets in WoW 12.0; the handler filters on unit == "target".
     eventFrame:RegisterEvent("UNIT_SPELLCAST_START")
     eventFrame:RegisterEvent("UNIT_SPELLCAST_STOP")
     eventFrame:RegisterEvent("UNIT_SPELLCAST_FAILED")
@@ -1473,12 +1473,12 @@ function FC.Enable()
     eventFrame:RegisterEvent("UNIT_SPELLCAST_EMPOWER_STOP")
     eventFrame:RegisterEvent("UNIT_SPELLCAST_DELAYED")
     eventFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_UPDATE")
-    eventFrame:RegisterUnitEvent("UNIT_TARGET", "focus")
+    eventFrame:RegisterUnitEvent("UNIT_TARGET", "target")
     eventFrame:RegisterEvent("UNIT_SPELLCAST_INTERRUPTIBLE")
     eventFrame:RegisterEvent("UNIT_SPELLCAST_NOT_INTERRUPTIBLE")
 
-    -- Catch a focus already mid-cast when first enabled
-    if UnitExists("focus") then StartCast() end
+    -- Catch a target already mid-cast when first enabled
+    if UnitExists("target") then StartCast() end
 end
 
 function FC.Disable()
@@ -1496,7 +1496,7 @@ end
 function FC.Init()
     if isInitialized then return end
     isInitialized = true
-    CreateFocusFrames()
+    CreateTargetFrames()
     CacheInterruptId()
     -- Show/hide the preview with native Edit Mode too. EDIT_MODE_ENTERED/EXITED
     -- are NOT real events (RegisterEvent throws on them) — hook the Edit Mode
@@ -1515,7 +1515,7 @@ function FC.Init()
     local cfg = GetDB()
     if cfg and cfg.enabled then FC.Enable() end
     if ns.CDMShared and ns.CDMShared.RegisterPanelCallback then
-        ns.CDMShared.RegisterPanelCallback("FocusCastbar", {
+        ns.CDMShared.RegisterPanelCallback("TargetCastbar", {
             onOpen  = FC.ShowPreview,
             onClose = FC.HidePreview,
         })

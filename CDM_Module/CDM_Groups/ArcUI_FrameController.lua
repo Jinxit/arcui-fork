@@ -757,6 +757,25 @@ local function AssignFrameToGroup(cdID, frame, groupName, row, col, viewerType, 
         if group.EnsureCellCapacity
            and group.layout
            and (r >= (group.layout.gridRows or 1) or c >= (group.layout.gridCols or 1)) then
+            -- AUTO-REFLOW GROUPS: the configured grid is AUTHORITATIVE (the
+            -- "Utility grows 3->6 columns on reload" regression, Discord
+            -- 1542106243676639362). The CDMGroups restore paths already hold
+            -- this rule, but this newer path still grew the grid for a stale
+            -- out-of-bounds saved home on every login - and the grown value
+            -- then persisted. Reflow decides the visual order anyway, so
+            -- fold the icon into a free in-bounds cell; the grow-back below
+            -- stays for STATIC groups (the shrink-while-hidden feature) and
+            -- as the last resort when every configured cell is held.
+            if group.autoReflow and group.FindNextFreeSlot then
+                local fr, fc = group:FindNextFreeSlot(false, true)
+                if fr ~= nil and fc ~= nil then
+                    TracePlacement("FrameController.ResolveTargetCell.foldOutOfBounds", {
+                        id = cdID, group = groupName, row = r, col = c,
+                        newRow = fr, newCol = fc,
+                    })
+                    return fr, fc
+                end
+            end
             group:EnsureCellCapacity(r, c)
             return r, c   -- the freshly created cell is necessarily free
         end
@@ -765,6 +784,68 @@ local function AssignFrameToGroup(cdID, frame, groupName, row, col, viewerType, 
         local occMember = group.members[occupant]
         if not (occMember and occMember.frame and occMember.frame.cooldownID == occupant) then
             return r, c  -- stale grid entry, safe to take over
+        end
+        -- SAVED-HOME PRIORITY, SYMMETRIC (placement-trace-proven login race,
+        -- 2026-08-26): dynamic reflow compacts members into cells that are
+        -- OTHER members' saved homes before every member has arrived
+        -- (Strikes capture: 11880's saved home is col 2, reflow parked it in
+        -- col 1; arc_spell_187874 then arrived for its saved col 1 and the
+        -- yield below displaced the RIGHTFUL OWNER). AddMemberAtWithFrame's
+        -- priority rule protects an owner from visitors; this is its mirror:
+        -- an icon restoring to its EXACT saved home outranks an occupant
+        -- whose own saved home is elsewhere. The squatter walks back to its
+        -- own saved cell when free, else to an adjacent free slot, else
+        -- overlaps transiently -- NOTHING is saved, matching this function's
+        -- contract. Killing the displacement at birth removes the
+        -- reflow-vs-grid oscillation it seeded and the yield pressure that
+        -- fed the grid-growth family (displaced members were how bad saved
+        -- cells got minted).
+        do
+            local savedAll = ns.CDMGroups.savedPositions
+            local mySaved = savedAll and savedAll[cdID]
+            if mySaved and mySaved.type == "group" and mySaved.target == groupName
+               and (mySaved.row or 0) == r and (mySaved.col or 0) == c then
+                local occSaved = savedAll and savedAll[occupant]
+                local occOwnsCell = occSaved and occSaved.type == "group"
+                    and occSaved.target == groupName
+                    and (occSaved.row or 0) == r and (occSaved.col or 0) == c
+                if not occOwnsCell then
+                    -- relocate the squatter: its own saved home first (when it
+                    -- is in this group, in bounds and free), else adjacent
+                    local nr, nc
+                    if occSaved and occSaved.type == "group" and occSaved.target == groupName then
+                        local hr, hc = occSaved.row or 0, occSaved.col or 0
+                        if hr < (group.layout and group.layout.gridRows or 1)
+                           and hc < (group.layout and group.layout.gridCols or 1) then
+                            local homeOcc = group.grid[hr] and group.grid[hr][hc]
+                            if not homeOcc or homeOcc == occupant then nr, nc = hr, hc end
+                        end
+                    end
+                    if nr == nil and group.FindAdjacentFreeSlot then
+                        nr, nc = group:FindAdjacentFreeSlot(r, c, false)
+                    end
+                    if nr ~= nil and nc ~= nil then
+                        if group.grid[r] and group.grid[r][c] == occupant then
+                            group.grid[r][c] = nil
+                        end
+                        group.grid[nr] = group.grid[nr] or {}
+                        group.grid[nr][nc] = occupant
+                        occMember.row, occMember.col = nr, nc
+                        TracePlacement("FrameController.AssignFrameToGroup.reclaimSavedHome", {
+                            id = cdID, group = groupName, row = r, col = c,
+                            squatter = occupant, squatterRow = nr, squatterCol = nc,
+                        })
+                    else
+                        -- nowhere for the squatter: transient overlap on the
+                        -- incomer's home; the restore/reflow passes resolve it
+                        TracePlacement("FrameController.AssignFrameToGroup.reclaimOverlap", {
+                            id = cdID, group = groupName, row = r, col = c,
+                            squatter = occupant,
+                        })
+                    end
+                    return r, c
+                end
+            end
         end
         TracePlacement("FrameController.AssignFrameToGroup.collision", {
             id = cdID,
@@ -3781,7 +3862,19 @@ local function InstallCDMHooks()
         if CooldownViewerItemDataMixin.SetCooldownID then
             hooksecurefunc(CooldownViewerItemDataMixin, "SetCooldownID", function(itemFrame, cooldownID)
                 if not _cdmGroupsEnabled then return end
-                
+
+                -- HOOK-LEVEL id transition tracker (_arcFCSeenCdID: written here,
+                -- read only by the same-id gate below). _arcLastEnhancedCdID is
+                -- stamped by the DEFERRED enhance pass, so a two-wave refresh storm
+                -- cycling a frame A→B→A between enhance passes made the return to A
+                -- match the stale stamp and skip the rebind dispatch — subscribers
+                -- kept B's shadow state on A's icon (Bloodlust wearing Stormstrike's
+                -- READY face until a cast, 2026-08-29). Tracking the id per CALL
+                -- sees every transition in the chain. Captured before any gate so
+                -- transitions on momentarily-unmanaged frames still record.
+                local prevSeenCdID = itemFrame._arcFCSeenCdID
+                itemFrame._arcFCSeenCdID = cooldownID
+
                 -- CRITICAL: Check hidden-by-bar BEFORE container gate.
                 -- Hidden frames may be in standard CDM viewers, not our containers.
                 -- When options panel is OPEN, _arcHiddenByBar is nil (cleared by ShowAllHiddenByBarOverlays)
@@ -3854,8 +3947,11 @@ local function InstallCDMHooks()
                 local isFreeIcon = itemFrame._cdmgIsFreeIcon
                 if not isInContainer and not isFreeIcon then return end
                 
-                -- Check if cooldownID actually changed from what we last enhanced
-                local prevCdID = itemFrame._arcLastEnhancedCdID
+                -- Check if cooldownID actually changed. Prefer the hook-level
+                -- tracker (sees every SetCooldownID transition) over the deferred
+                -- enhance stamp (frozen across refresh storms — see the tracker
+                -- comment at the top of this hook).
+                local prevCdID = prevSeenCdID or itemFrame._arcLastEnhancedCdID
                 if prevCdID and prevCdID == cooldownID then return end  -- Same cdID, no reshuffle
                 
                 -- Frame got a NEW cooldownID - clear ALL stale caches immediately

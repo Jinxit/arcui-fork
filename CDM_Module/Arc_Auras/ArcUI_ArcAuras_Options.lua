@@ -115,9 +115,9 @@ local function ShowPassiveSpellWarning(spellID, displayName)
         confirmFrame:Hide()
         local ArcAurasCooldown = ns.ArcAurasCooldown
         if ArcAurasCooldown and ArcAurasCooldown.AddTrackedSpell then
-            local success = ArcAurasCooldown.AddTrackedSpell(spellID)
+            local success, _, addedName = ArcAurasCooldown.AddTrackedSpell(spellID, true)
             if success then
-                local name = ArcAurasCooldown.GetSpellNameAndIcon(spellID) or ("Spell " .. spellID)
+                local name = addedName or ArcAurasCooldown.GetSpellNameAndIcon(spellID) or ("Spell " .. spellID)
                 print("|cff00CCFF[Arc Auras]|r Added spell: " .. name)
                 Options.InvalidateCache()
                 if ns.CDMEnhanceOptions and ns.CDMEnhanceOptions.InvalidateCache then
@@ -238,7 +238,8 @@ end
 -- else goes straight through. See the ONE PATH block in ArcUI_ArcAuras.lua.
 function Options.ApplyArcIconOverride(arcID, overrideID, idType)
     if type(arcID) ~= "string" then return end
-    if overrideID == 0 then overrideID = nil end
+    -- 0 is a REAL value now (transparent icon) - it flows to the shared
+    -- writer untranslated, which also owns the aura-kind rejection
 
     -- Totems answer HERE, before any branch: the raw-FileDataID branch below
     -- dead-ends on them silently (GetArcConfigByID returns nil), and only the
@@ -250,7 +251,7 @@ function Options.ApplyArcIconOverride(arcID, overrideID, idType)
 
     local isTimer = arcID:match("^arc_timer_") ~= nil
 
-    if overrideID and isTimer and idType and idType ~= "icon" then
+    if overrideID and overrideID ~= 0 and isTimer and idType and idType ~= "icon" then
         -- resolve the declared source to the FileDataID timers store
         local fileID
         if idType == "item" then
@@ -266,7 +267,7 @@ function Options.ApplyArcIconOverride(arcID, overrideID, idType)
         end
         overrideID = fileID
 
-    elseif overrideID and idType == "icon" and not isTimer then
+    elseif overrideID and overrideID ~= 0 and idType == "icon" and not isTimer then
         -- Raw texture FileDataID for a non-timer kind. The shared writer
         -- resolves a SOURCE id (spell, then item), which would fail or find
         -- the wrong art for a bare texture id, so store it directly and
@@ -382,12 +383,13 @@ local function SubmitAddItem(val)
     pendingItemID = ""
     if not itemID or itemID <= 0 then return nil end
     if not (ArcAuras and ArcAuras.AddTrackedItem) then return nil end
-    local success = ArcAuras.AddTrackedItem({
+    local success, addedArcID = ArcAuras.AddTrackedItem({
         type = "item",
         itemID = itemID,
         enabled = true,
+        allowCopy = true,  -- explicit user add: a second add of the same item creates a copy
     })
-    local name = select(1, GetItemInfo(itemID)) or ("Item " .. itemID)
+    local name = select(1, C_Item.GetItemInfo(itemID)) or ("Item " .. itemID)
     if success then
         print("|cff00CCFF[Arc Auras]|r Added: " .. name)
     else
@@ -395,7 +397,7 @@ local function SubmitAddItem(val)
     end
     NotifyCatalogChanged()
     return success and true or false, success and name or "Already tracked or invalid",
-        success and ArcAuras.MakeItemID and ArcAuras.MakeItemID(itemID) or nil
+        success and (addedArcID or (ArcAuras.MakeItemID and ArcAuras.MakeItemID(itemID))) or nil
 end
 
 local function SubmitAddSpell(val)
@@ -411,8 +413,8 @@ local function SubmitAddSpell(val)
     end
     local ArcAurasCooldown = ns.ArcAurasCooldown
     if not (ArcAurasCooldown and ArcAurasCooldown.AddTrackedSpell) then return nil end
-    local success = ArcAurasCooldown.AddTrackedSpell(spellID)
-    local name = ArcAurasCooldown.GetSpellNameAndIcon(spellID) or ("Spell " .. spellID)
+    local success, addedArcID, addedName = ArcAurasCooldown.AddTrackedSpell(spellID, true)
+    local name = addedName or ArcAurasCooldown.GetSpellNameAndIcon(spellID) or ("Spell " .. spellID)
     if success then
         print("|cff00CCFF[Arc Auras]|r Added spell: " .. name)
     else
@@ -420,7 +422,7 @@ local function SubmitAddSpell(val)
     end
     NotifyCatalogChanged()
     return success and true or false, success and name or "Already tracked or invalid spell",
-        success and ArcAuras.MakeSpellID and ArcAuras.MakeSpellID(spellID) or nil
+        success and addedArcID or nil
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -1528,22 +1530,28 @@ local function GetTrackedItemsList()
     if db.trackedItems then
         for arcID, config in pairs(db.trackedItems) do
             local name, icon = nil, nil
-            local arcType, id = ArcAuras.ParseArcID(arcID)
+            local arcType, id, copyIndex = ArcAuras.ParseArcID(arcID)
             local itemID = nil
-            
+
             if arcType == "trinket" then
                 itemID = GetInventoryItemID("player", id)
                 if itemID then
-                    name, icon = select(1, GetItemInfo(itemID)), select(10, GetItemInfo(itemID))
+                    name, icon = select(1, C_Item.GetItemInfo(itemID)), select(10, C_Item.GetItemInfo(itemID))
                     icon = icon or GetInventoryItemTexture("player", id)
                 end
                 name = name or ("Trinket Slot " .. id)
             elseif arcType == "item" then
                 itemID = config.itemID
                 if itemID then
-                    name, icon = select(1, GetItemInfo(itemID)), select(10, GetItemInfo(itemID))
+                    name, icon = select(1, C_Item.GetItemInfo(itemID)), select(10, C_Item.GetItemInfo(itemID))
                 end
                 name = name or ("Item " .. (itemID or "?"))
+                -- Item COPIES share one itemID — number them so the catalog
+                -- can tell them apart (spell copies bake the number into
+                -- cfg.name at creation; item names come from GetItemInfo).
+                if copyIndex and copyIndex > 1 then
+                    name = name .. " (" .. copyIndex .. ")"
+                end
             end
             
             table.insert(items, {
@@ -1994,7 +2002,7 @@ local function CreateAutoTrackSlotEntry(slotInfo)
         name = function()
             local itemID = GetInventoryItemID("player", slotID)
             if itemID then
-                local itemName = GetItemInfo(itemID)
+                local itemName = C_Item.GetItemInfo(itemID)
                 local isOnUse = ArcAuras.IsItemOnUse(itemID)
                 local onUseStr = isOnUse and "|cff00ff00On-Use|r" or "|cff888888Passive|r"
                 return string.format("|T%s:18|t  |cffffd700%s:|r %s (%s)", 
@@ -2010,7 +2018,7 @@ local function CreateAutoTrackSlotEntry(slotInfo)
             local itemID = GetInventoryItemID("player", slotID)
             local desc = slotName .. "\n"
             if itemID then
-                local itemName = GetItemInfo(itemID)
+                local itemName = C_Item.GetItemInfo(itemID)
                 local isOnUse = ArcAuras.IsItemOnUse(itemID)
                 desc = desc .. "\n|cffffd700" .. (itemName or "Loading...") .. "|r"
                 desc = desc .. "\nItem ID: " .. itemID
@@ -2517,13 +2525,13 @@ function ns.GetArcAurasOptionsTable()
                     local overrideID = item.config and (item.config.iconID or "?")
                     return "|cffFFCC00Current: Custom Icon|r (IconID: " .. tostring(overrideID) .. ")\n|cff888888Enter a new IconID below, or 0 to reset to the tracked spell's icon.|r"
                 end
-                return "|cff888888Enter an IconID (FileDataID) to use that texture. This is the number shown as 'IconID' in spell tooltips.  Enter 0 or leave blank to reset.|r"
+                return "|cff888888Enter an IconID (FileDataID) to use that texture. This is the number shown as 'IconID' in spell tooltips. 0 = transparent icon; leave blank to reset.|r"
             end
             if item.hasIconOverride then
                 local overrideID = item.config and (item.config.iconOverrideID or item.config.iconID or "?") or "?"
                 return "|cffFFCC00Current: Custom Icon|r (Source ID: " .. tostring(overrideID) .. ")\n|cff888888Enter a new Spell ID or Item ID below, or 0 to reset.|r"
             end
-            return "|cff888888Enter a Spell ID or Item ID to use its icon instead of the default. Enter 0 or leave blank to reset.|r"
+            return "|cff888888Enter a Spell ID or Item ID to use its icon instead of the default. 0 = transparent icon; leave blank to reset.|r"
         end,
         order = 108,
         width = "full",

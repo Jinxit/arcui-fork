@@ -51,6 +51,7 @@ local collapsedSections = {
   rangeIndicator = true,
   procGlow = true,
   alertEvents = true,
+  cooldownAlerts = true,   -- cooldown icons: Ready / On Cooldown / Charge Gained sounds
   border = true,
   cooldownSwipe = true,
   chargeText = true,
@@ -144,7 +145,9 @@ local SECTION_FIELDS = {
   customLabel = { "customLabel.text", "customLabel.size", "customLabel.color", "customLabel.anchor", "customLabel.xOffset", "customLabel.yOffset", "customLabel.showWhenActive", "customLabel.showWhenInactive", "customLabel.showInReadyState", "customLabel.showInCooldownState", "customLabel.showWhileRecharging", "customLabel.text2", "customLabel.size2", "customLabel.color2", "customLabel.anchor2", "customLabel.xOffset2", "customLabel.yOffset2", "customLabel.showWhenActive2", "customLabel.showWhenInactive2", "customLabel.showInReadyState2", "customLabel.showInCooldownState2", "customLabel.showWhileRecharging2", "customLabel.text3", "customLabel.size3", "customLabel.color3", "customLabel.anchor3", "customLabel.xOffset3", "customLabel.yOffset3", "customLabel.showWhenActive3", "customLabel.showWhenInactive3", "customLabel.showInReadyState3", "customLabel.showInCooldownState3", "customLabel.showWhileRecharging3", "customLabel.labelCount", "customLabel.font", "customLabel.outline", "customLabel.frameStrata", "customLabel.frameLevel" },
   alertEvents = { "alertEvents" },
   -- arc aura icons: engine-native alert sounds (purple "customized" dot)
-  auraAlerts = { "auraAlerts.gainedSound", "auraAlerts.stacksSound", "auraAlerts.removedSound", "auraAlerts.gainedTTS", "auraAlerts.removedTTS" },
+  auraAlerts = { "auraAlerts.gainedSound", "auraAlerts.stacksSound", "auraAlerts.removedSound", "auraAlerts.gainedTTS", "auraAlerts.removedTTS", "auraAlerts.gainedSoundOn", "auraAlerts.gainedTTSOn", "auraAlerts.stacksSoundOn", "auraAlerts.removedSoundOn", "auraAlerts.removedTTSOn" },
+  -- cooldown icons: shadow-driven cooldown event sounds
+  cooldownAlerts = { "cooldownAlerts.readySound", "cooldownAlerts.readyTTS", "cooldownAlerts.readySoundOn", "cooldownAlerts.readyTTSOn", "cooldownAlerts.cooldownSound", "cooldownAlerts.cooldownTTS", "cooldownAlerts.cooldownSoundOn", "cooldownAlerts.cooldownTTSOn", "cooldownAlerts.rechargingSound", "cooldownAlerts.rechargingTTS", "cooldownAlerts.rechargingSoundOn", "cooldownAlerts.rechargingTTSOn", "cooldownAlerts.chargeSound", "cooldownAlerts.chargeTTS", "cooldownAlerts.chargeSoundOn", "cooldownAlerts.chargeTTSOn", "cooldownAlerts.channel" },
   spellUsability = { "spellUsability.enabled", "spellUsability.useNormalColor", "spellUsability.normalColor", "spellUsability.normalDesaturate", "spellUsability.useOnCooldownColor", "spellUsability.onCooldownColor", "spellUsability.onCooldownDesaturate", "spellUsability.notEnoughResourceAlpha", "spellUsability.notEnoughResourceColor", "spellUsability.notEnoughResourceDesaturate", "spellUsability.notUsableAlpha", "spellUsability.notUsableColor", "spellUsability.notUsableDesaturate", "spellUsability.usableGlow", "spellUsability.usableGlowCombatOnly", "spellUsability.usableGlowType", "spellUsability.usableGlowColor", "spellUsability.usableGlowScale", "spellUsability.usableGlowSpeed", "spellUsability.usableGlowLines", "spellUsability.usableGlowThickness", "spellUsability.usableGlowParticles", "spellUsability.usableGlowXOffset", "spellUsability.usableGlowYOffset", "spellUsability.usableGlowFrameStrata", "spellUsability.usableGlowFrameLevel" },
 }
 
@@ -165,8 +168,20 @@ local function IsMasqueActive()
     if ns.Masque.IsEnabled then
         return ns.Masque.IsEnabled()
     end
-    
+
     return false
+end
+
+-- Helper for the AURA panel's Zoom/Aspect/Padding gates: Masque governs the
+-- selection ONLY when it is active AND the selected icon is a CDM aura icon.
+-- Arc AURA icons are never Masque-skinned (support parked 2026-09-11), so
+-- their appearance sliders stay live regardless of Masque state.
+local function MasqueControlsAuraSelection()
+    if not IsMasqueActive() then return false end
+    if type(selectedAuraIcon) == "string" and selectedAuraIcon:match("^arc_aura_") then
+        return false
+    end
+    return true
 end
 
 -- Helper: Check if Masque controls cooldown animations (disables cooldown swipe options)
@@ -3306,7 +3321,10 @@ function ns.GetCDMAuraIconsOptionsTable()
       order = 100.1,
       width = "full",
       fontSize = "medium",
-      hidden = function() return collapsedSections.iconAppearance or not IsMasqueActive() end,
+      -- arc aura icons are never Masque-skinned: no notice for them
+      hidden = function()
+        return collapsedSections.iconAppearance or not MasqueControlsAuraSelection()
+      end,
     },
     
     useGroupScale = {
@@ -3436,27 +3454,27 @@ function ns.GetCDMAuraIconsOptionsTable()
     },
     aspectRatio = {
       type = "range", name = "Aspect Ratio", min = 0.25, max = 2.5, step = 0.05,
-      desc = "Adjusts icon shape. 1 = square, higher = wider, lower = taller.\n\n|cffff9900Note:|r Disabled when Masque is active - Masque controls icon appearance via its skin settings.",
+      desc = "Adjusts icon shape. 1 = square, higher = wider, lower = taller.\n\n|cffff9900Note:|r Disabled when Masque is active - Masque controls icon appearance via its skin settings. Arc aura icons are never Masque-skinned, so these always apply to them.",
       get = function() local c = GetAuraCfg(); return c and c.aspectRatio or 1.0 end,
       set = function(_, v) ApplyAuraSetting(function(c) c.aspectRatio = v end) end,
       order = 104, width = 0.85, hidden = HideAuraIconAppearance,
-      disabled = IsMasqueActive,
+      disabled = MasqueControlsAuraSelection,
     },
     zoom = {
       type = "range", name = "Zoom", min = 0, max = 0.3, step = 0.01,
-      desc = "Crops icon edges for a cleaner look.\n\n|cffff9900Note:|r Disabled when Masque is active - Masque controls zoom via its skin settings.",
+      desc = "Crops icon edges for a cleaner look.\n\n|cffff9900Note:|r Disabled when Masque is active - Masque controls zoom via its skin settings. Arc aura icons are never Masque-skinned, so this always applies to them.",
       get = function() local c = GetAuraCfg(); return c and c.zoom or 0.08 end,
       set = function(_, v) ApplyAuraSetting(function(c) c.zoom = v end) end,
       order = 105, width = 0.65, hidden = HideAuraIconAppearance,
-      disabled = IsMasqueActive,
+      disabled = MasqueControlsAuraSelection,
     },
     padding = {
       type = "range", name = "Padding", min = -5, max = 20, step = 1,
-      desc = "Space between icon and frame edges.\n\n|cffff9900Note:|r Disabled when Masque is active - Masque controls icon appearance via its skin settings.",
+      desc = "Space between icon and frame edges.\n\n|cffff9900Note:|r Disabled when Masque is active - Masque controls icon appearance via its skin settings. Arc aura icons are never Masque-skinned, so this always applies to them.",
       get = function() local c = GetAuraCfg(); return c and c.padding or 0 end,
       set = function(_, v) ApplyAuraSetting(function(c) c.padding = v end) end,
       order = 106, width = 0.65, hidden = HideAuraIconAppearance,
-      disabled = IsMasqueActive,
+      disabled = MasqueControlsAuraSelection,
     },
     shadowSize = {
       type = "range", name = "Shadow Size",
@@ -3503,7 +3521,7 @@ function ns.GetCDMAuraIconsOptionsTable()
     },
     showIcon = {
       type = "toggle", name = "Show Icon",
-      desc = "Show the icon. Turn OFF to hide the whole icon (artwork, cooldown swipe and flash) and keep only the stack and duration text visible.",
+      desc = "Show the icon artwork. Turn OFF to make the icon TRANSPARENT: the art disappears while the cooldown swipe, border, texts and glows keep working (same as entering 0 in Custom Icon). Stack proc trackers on an invisible icon.",
       get = function()
         return GetAuraBoolSetting(function(c) return not c.forceHideIcon end, function() local c = GetAuraCfg(); return not (c and c.forceHideIcon) end)
       end,
@@ -3534,7 +3552,7 @@ function ns.GetCDMAuraIconsOptionsTable()
       type = "input",
       dialogControl = "ArcUI_EditBox",
       name = "Custom Icon",
-      desc = "Override the icon texture.\n\nCDM icons: enter a spell ID (e.g. 403) or texture file ID (e.g. 136116).\nArc icons: enter the number matching the ID Type picked next to this.\nLeave empty / 0 to use the default icon.",
+      desc = "Override the icon texture.\n\nCDM icons: enter a spell ID (e.g. 403) or texture file ID (e.g. 136116).\nArc icons: enter the number matching the ID Type picked next to this.\nLeave empty to use the default icon. Enter 0 for a TRANSPARENT icon: no art, while swipe, texts and glows still show.",
       get = function()
         -- arc icons: show the arc override, not customIconID
         local arcID = GetSingleSelectedArcIcon()
@@ -3855,7 +3873,7 @@ function ns.GetCDMAuraIconsOptionsTable()
     activeStateAlpha = {
       type = "range",
       name = "Active Alpha",
-      desc = "Icon visibility when active",
+      desc = "Icon visibility when active. Setting this to 0 also sets Inactive Alpha to 0: in combat the game hides aura state from addons, so a fully hidden active icon requires the Aura Missing look hidden too - they cannot be split at zero.",
       min = 0, max = 1.0, step = 0.05,
       get = function()
         local c = GetAuraCfg()
@@ -3869,6 +3887,14 @@ function ns.GetCDMAuraIconsOptionsTable()
           if not c.cooldownStateVisuals then c.cooldownStateVisuals = {} end
           if not c.cooldownStateVisuals.readyState then c.cooldownStateVisuals.readyState = {} end
           c.cooldownStateVisuals.readyState.alpha = v
+          -- ZERO-LINK (Arc's call): Active 0 with a visible ghost is not
+          -- physically expressible (the Missing look would show in BOTH
+          -- states - presence is secret in combat, occlusion is the only
+          -- state logic), so 0 turns the Missing look off with it.
+          if v == 0 then
+            if not c.cooldownStateVisuals.cooldownState then c.cooldownStateVisuals.cooldownState = {} end
+            c.cooldownStateVisuals.cooldownState.alpha = 0
+          end
         end)
       end,
       order = 107.83, width = 0.8,
@@ -4797,7 +4823,7 @@ function ns.GetCDMAuraIconsOptionsTable()
     inactiveStateAlpha = {
       type = "range",
       name = "Inactive Alpha",
-      desc = "Icon visibility when inactive",
+      desc = "Icon visibility when inactive.\n\nNote: Masque skins are not yet supported on aura icons - they stay unskinned so no skin piece can cover the live aura.",
       min = 0, max = 1.0, step = 0.05,
       get = function()
         local c = GetAuraCfg()
@@ -5602,121 +5628,332 @@ function ns.GetCDMAuraIconsOptionsTable()
     -- Two independent controls per edge: a sound picker (the LSM media widget,
     -- same one the Pings panel uses -- names, speaker preview, scroll) and a
     -- line to speak. Either, both or neither.
-    alertGained = {
-      type = "select",
-      dialogControl = "LSM30_Sound",
-      name = "When Gained",
-      desc = "Sound played when this aura appears on you (or on your target, for debuff icons).",
+    auraGrp_gained = {
+      type = "group",
+      inline = true,
+      name = "Aura Gained",
       order = 109.63,
-      width = 1.6,
-      values = AlertChoiceValues,
       hidden = HideAuraAlertEvents,
-      get = function()
-        local c = GetAuraCfg()
-        return AlertSoundGet(c and c.auraAlerts and c.auraAlerts.gainedSound)
-      end,
-      set = function(_, v)
-        ApplyAuraSetting(function(c)
-          c.auraAlerts = c.auraAlerts or {}
-          c.auraAlerts.gainedSound = (v ~= "None") and v or nil
-        end)
+      args = {
+      info = {
+        type = "description",
+        name = "|cff888888This aura appears on you (or on your target, for debuff icons). Speech rides your own cast for engine icons.|r",
+        order = 0,
+        width = "full",
+        fontSize = "small",
+      },
+        sndOn = {
+          type = "toggle",
+          name = "Sound",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 1,
+          width = 0.6,
+          hidden = function()
+            return false
+          end,
+          get = function()
+            local c = GetAuraCfg()
+            local a = c and c.auraAlerts
+            if a and a.gainedSoundOn ~= nil then return a.gainedSoundOn end
+            return (a and a.gainedSound) ~= nil
+          end,
+          set = function(_, v)
+            ApplyAuraSetting(function(c)
+              c.auraAlerts = c.auraAlerts or {}
+              c.auraAlerts.gainedSoundOn = v
+            end)
         if ns.AuraIconSounds then ns.AuraIconSounds.QueueSync() end
-        local reg = LibStub("AceConfigRegistry-3.0", true)
-        if reg then reg:NotifyChange("ArcUI") end
-      end,
-    },
-    alertGainedTTS = {
-      type = "input",
-      name = "Say When Gained",
-      desc = function()
-        if IsCurrentAuraSelectionAllArcAura() then
-          return "Spoken when you cast this spell yourself. Leave empty for no speech.\n\n|cff888888The game never tells addons that an aura landed, so speech can only ride your own cast. Pick a sound instead for procs or buffs cast on you by someone else.|r"
-        end
-        return "Spoken when this aura appears. Leave empty for no speech."
-      end,
-      order = 109.635,
-      width = 1.6,
-      hidden = function()
-        if HideAuraAlertEvents() then return true end
-        return not AlertTTSAllowed("gained")
-      end,
-      get = function()
-        local c = GetAuraCfg()
-        return (c and c.auraAlerts and c.auraAlerts.gainedTTS) or ""
-      end,
-      set = function(_, v)
-        ApplyAuraSetting(function(c)
-          c.auraAlerts = c.auraAlerts or {}
-          c.auraAlerts.gainedTTS = (v ~= "") and v or nil
-        end)
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        sndFile = {
+          type = "select",
+          dialogControl = "LSM30_Sound",
+          name = "Sound File",
+          desc = "Sound played for this trigger.",
+          order = 2,
+          width = 1.3,
+          values = AlertChoiceValues,
+          hidden = function()
+            local c = GetAuraCfg()
+            local a = c and c.auraAlerts
+            if a and a.gainedSoundOn ~= nil then return not a.gainedSoundOn end
+            return (a and a.gainedSound) == nil
+          end,
+          get = function()
+            local c = GetAuraCfg()
+            return AlertSoundGet(c and c.auraAlerts and c.auraAlerts.gainedSound)
+          end,
+          set = function(_, v)
+            ApplyAuraSetting(function(c)
+              c.auraAlerts = c.auraAlerts or {}
+              c.auraAlerts.gainedSound = (v ~= "None") and v or nil
+            end)
         if ns.AuraIconSounds then ns.AuraIconSounds.QueueSync() end
-      end,
+          end,
+        },
+        ttsOn = {
+          type = "toggle",
+          name = "Speech",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 3,
+          width = 0.6,
+          hidden = function()
+            if not AlertTTSAllowed("gained") then return true end
+            return false
+          end,
+          get = function()
+            local c = GetAuraCfg()
+            local a = c and c.auraAlerts
+            if a and a.gainedTTSOn ~= nil then return a.gainedTTSOn end
+            return (a and a.gainedTTS) ~= nil
+          end,
+          set = function(_, v)
+            ApplyAuraSetting(function(c)
+              c.auraAlerts = c.auraAlerts or {}
+              c.auraAlerts.gainedTTSOn = v
+            end)
+        if ns.AuraIconSounds then ns.AuraIconSounds.QueueSync() end
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        ttsLine = {
+          type = "input",
+          name = "Line to Speak",
+          desc = "Spoken line for this trigger. Leave empty for no speech.",
+          order = 4,
+          width = 1.3,
+          hidden = function()
+            if not AlertTTSAllowed("gained") then return true end
+            local c = GetAuraCfg()
+            local a = c and c.auraAlerts
+            if a and a.gainedTTSOn ~= nil then return not a.gainedTTSOn end
+            return (a and a.gainedTTS) == nil
+          end,
+          get = function()
+            local c = GetAuraCfg()
+            return (c and c.auraAlerts and c.auraAlerts.gainedTTS) or ""
+          end,
+          set = function(_, v)
+            ApplyAuraSetting(function(c)
+              c.auraAlerts = c.auraAlerts or {}
+              c.auraAlerts.gainedTTS = (v ~= "") and v or nil
+            end)
+        if ns.AuraIconSounds then ns.AuraIconSounds.QueueSync() end
+          end,
+        },
+      },
     },
-    alertStacks = {
-      type = "select",
-      dialogControl = "LSM30_Sound",
-      name = "When Stacks Increase",
-      desc = "Sound played each time this aura gains a stack.",
+    auraGrp_stacks = {
+      type = "group",
+      inline = true,
+      name = "Stacks Increase",
       order = 109.64,
-      width = 1.6,
-      values = AlertChoiceValues,
-      -- engine-only trigger: CDM application counts are secret
       hidden = function()
         return HideAuraAlertEvents() or not IsCurrentAuraSelectionAllArcAura()
       end,
-      get = function()
-        local c = GetAuraCfg()
-        return AlertSoundGet(c and c.auraAlerts and c.auraAlerts.stacksSound)
-      end,
-      set = function(_, v)
-        ApplyAuraSetting(function(c)
-          c.auraAlerts = c.auraAlerts or {}
-          c.auraAlerts.stacksSound = (v ~= "None") and v or nil
-        end)
+      args = {
+      info = {
+        type = "description",
+        name = "|cff888888Each time this aura gains a stack.|r",
+        order = 0,
+        width = "full",
+        fontSize = "small",
+      },
+        sndOn = {
+          type = "toggle",
+          name = "Sound",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 1,
+          width = 0.6,
+          hidden = function()
+            return false
+          end,
+          get = function()
+            local c = GetAuraCfg()
+            local a = c and c.auraAlerts
+            if a and a.stacksSoundOn ~= nil then return a.stacksSoundOn end
+            return (a and a.stacksSound) ~= nil
+          end,
+          set = function(_, v)
+            ApplyAuraSetting(function(c)
+              c.auraAlerts = c.auraAlerts or {}
+              c.auraAlerts.stacksSoundOn = v
+            end)
         if ns.AuraIconSounds then ns.AuraIconSounds.QueueSync() end
-      end,
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        sndFile = {
+          type = "select",
+          dialogControl = "LSM30_Sound",
+          name = "Sound File",
+          desc = "Sound played for this trigger.",
+          order = 2,
+          width = 1.3,
+          values = AlertChoiceValues,
+          hidden = function()
+            local c = GetAuraCfg()
+            local a = c and c.auraAlerts
+            if a and a.stacksSoundOn ~= nil then return not a.stacksSoundOn end
+            return (a and a.stacksSound) == nil
+          end,
+          get = function()
+            local c = GetAuraCfg()
+            return AlertSoundGet(c and c.auraAlerts and c.auraAlerts.stacksSound)
+          end,
+          set = function(_, v)
+            ApplyAuraSetting(function(c)
+              c.auraAlerts = c.auraAlerts or {}
+              c.auraAlerts.stacksSound = (v ~= "None") and v or nil
+            end)
+        if ns.AuraIconSounds then ns.AuraIconSounds.QueueSync() end
+          end,
+        },
+      },
     },
-    alertRemoved = {
-      type = "select",
-      dialogControl = "LSM30_Sound",
-      name = "When It Drops",
-      desc = "Sound played when this aura is removed or expires.",
+    auraGrp_removed = {
+      type = "group",
+      inline = true,
+      name = "Aura Removed",
       order = 109.65,
+      hidden = HideAuraAlertEvents,
+      args = {
+      info = {
+        type = "description",
+        name = "|cff888888This aura is removed or expires.|r",
+        order = 0,
+        width = "full",
+        fontSize = "small",
+      },
+        sndOn = {
+          type = "toggle",
+          name = "Sound",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 1,
+          width = 0.6,
+          hidden = function()
+            return false
+          end,
+          get = function()
+            local c = GetAuraCfg()
+            local a = c and c.auraAlerts
+            if a and a.removedSoundOn ~= nil then return a.removedSoundOn end
+            return (a and a.removedSound) ~= nil
+          end,
+          set = function(_, v)
+            ApplyAuraSetting(function(c)
+              c.auraAlerts = c.auraAlerts or {}
+              c.auraAlerts.removedSoundOn = v
+            end)
+        if ns.AuraIconSounds then ns.AuraIconSounds.QueueSync() end
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        sndFile = {
+          type = "select",
+          dialogControl = "LSM30_Sound",
+          name = "Sound File",
+          desc = "Sound played for this trigger.",
+          order = 2,
+          width = 1.3,
+          values = AlertChoiceValues,
+          hidden = function()
+            local c = GetAuraCfg()
+            local a = c and c.auraAlerts
+            if a and a.removedSoundOn ~= nil then return not a.removedSoundOn end
+            return (a and a.removedSound) == nil
+          end,
+          get = function()
+            local c = GetAuraCfg()
+            return AlertSoundGet(c and c.auraAlerts and c.auraAlerts.removedSound)
+          end,
+          set = function(_, v)
+            ApplyAuraSetting(function(c)
+              c.auraAlerts = c.auraAlerts or {}
+              c.auraAlerts.removedSound = (v ~= "None") and v or nil
+            end)
+        if ns.AuraIconSounds then ns.AuraIconSounds.QueueSync() end
+          end,
+        },
+        ttsOn = {
+          type = "toggle",
+          name = "Speech",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 3,
+          width = 0.6,
+          hidden = function()
+            if not AlertTTSAllowed("removed") then return true end
+            return false
+          end,
+          get = function()
+            local c = GetAuraCfg()
+            local a = c and c.auraAlerts
+            if a and a.removedTTSOn ~= nil then return a.removedTTSOn end
+            return (a and a.removedTTS) ~= nil
+          end,
+          set = function(_, v)
+            ApplyAuraSetting(function(c)
+              c.auraAlerts = c.auraAlerts or {}
+              c.auraAlerts.removedTTSOn = v
+            end)
+        if ns.AuraIconSounds then ns.AuraIconSounds.QueueSync() end
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        ttsLine = {
+          type = "input",
+          name = "Line to Speak",
+          desc = "Spoken line for this trigger. Leave empty for no speech.",
+          order = 4,
+          width = 1.3,
+          hidden = function()
+            if not AlertTTSAllowed("removed") then return true end
+            local c = GetAuraCfg()
+            local a = c and c.auraAlerts
+            if a and a.removedTTSOn ~= nil then return not a.removedTTSOn end
+            return (a and a.removedTTS) == nil
+          end,
+          get = function()
+            local c = GetAuraCfg()
+            return (c and c.auraAlerts and c.auraAlerts.removedTTS) or ""
+          end,
+          set = function(_, v)
+            ApplyAuraSetting(function(c)
+              c.auraAlerts = c.auraAlerts or {}
+              c.auraAlerts.removedTTS = (v ~= "") and v or nil
+            end)
+        if ns.AuraIconSounds then ns.AuraIconSounds.QueueSync() end
+          end,
+        },
+      },
+    },
+    alertChannel = {
+      type = "select",
+      name = "Output Channel",
+      desc = "Which of the game's volume sliders these alert sounds come out of."
+          .. "|n|n|cff888888Master ignores the other sliders, so an alert stays audible even with Sound Effects turned right down. Pick one of the others if you would rather the alert follow a slider you already set.|r",
+      order = 109.6557,
       width = 1.6,
-      values = AlertChoiceValues,
+      values = { Master = "Master", SFX = "Sound Effects", Music = "Music",
+                 Ambience = "Ambience", Dialog = "Dialog" },
+      sorting = { "Master", "SFX", "Music", "Ambience", "Dialog" },
       hidden = HideAuraAlertEvents,
       get = function()
         local c = GetAuraCfg()
-        return AlertSoundGet(c and c.auraAlerts and c.auraAlerts.removedSound)
+        return (c and c.auraAlerts and c.auraAlerts.channel) or "Master"
       end,
       set = function(_, v)
         ApplyAuraSetting(function(c)
           c.auraAlerts = c.auraAlerts or {}
-          c.auraAlerts.removedSound = (v ~= "None") and v or nil
-        end)
-        if ns.AuraIconSounds then ns.AuraIconSounds.QueueSync() end
-        local reg = LibStub("AceConfigRegistry-3.0", true)
-        if reg then reg:NotifyChange("ArcUI") end
-      end,
-    },
-    alertRemovedTTS = {
-      type = "input",
-      name = "Say When It Drops",
-      desc = "Spoken when this aura is removed or expires. Leave empty for no speech.",
-      order = 109.655,
-      width = 1.6,
-      hidden = function()
-        if HideAuraAlertEvents() then return true end
-        return not AlertTTSAllowed("removed")
-      end,
-      get = function()
-        local c = GetAuraCfg()
-        return (c and c.auraAlerts and c.auraAlerts.removedTTS) or ""
-      end,
-      set = function(_, v)
-        ApplyAuraSetting(function(c)
-          c.auraAlerts = c.auraAlerts or {}
-          c.auraAlerts.removedTTS = (v ~= "") and v or nil
+          -- Master is the default, so store nothing for it (keeps saved
+          -- variables sparse, same as the sound slots)
+          c.auraAlerts.channel = (v ~= "Master") and v or nil
         end)
         if ns.AuraIconSounds then ns.AuraIconSounds.QueueSync() end
       end,
@@ -7178,6 +7415,16 @@ local function GetCooldownFilterValues()
   return values
 end
 
+-- Cooldown Sound Alerts section visibility: real spell/item cooldowns only --
+-- totems and custom timers have no spell cooldown state to alert on.
+local function HideCooldownAlertItems()
+  if HideIfNoCooldownSelection() then return true end
+  if IsEditingMixedTypes() then return true end
+  if IsCurrentCooldownSelectionAllTotem() then return true end
+  if IsCurrentCooldownSelectionAllCustomTimer() then return true end
+  return collapsedSections.cooldownAlerts
+end
+
 function ns.GetCDMCooldownIconsOptionsTable()
   local args = {
     desc = {
@@ -7591,7 +7838,7 @@ function ns.GetCDMCooldownIconsOptionsTable()
     },
     showIcon = {
       type = "toggle", name = "Show Icon",
-      desc = "Show the icon. Turn OFF to hide the whole icon (artwork, cooldown swipe and flash) and keep only the charge and duration text visible.",
+      desc = "Show the icon artwork. Turn OFF to make the icon TRANSPARENT: the art disappears while the cooldown swipe, border, texts and glows keep working (same as entering 0 in Custom Icon). Stack proc trackers on an invisible icon.",
       get = function()
         return GetCooldownBoolSetting(function(c) return not c.forceHideIcon end, function() local c = GetCooldownCfg(); return not (c and c.forceHideIcon) end)
       end,
@@ -7622,7 +7869,7 @@ function ns.GetCDMCooldownIconsOptionsTable()
       type = "input",
       dialogControl = "ArcUI_EditBox",
       name = "Custom Icon",
-      desc = "Override the icon texture.\n\nCDM icons: enter a spell ID (e.g. 403) or texture file ID (e.g. 136116).\nArc icons: enter the number matching the ID Type picked next to this.\nLeave empty / 0 to use the default icon.",
+      desc = "Override the icon texture.\n\nCDM icons: enter a spell ID (e.g. 403) or texture file ID (e.g. 136116).\nArc icons: enter the number matching the ID Type picked next to this.\nLeave empty to use the default icon. Enter 0 for a TRANSPARENT icon: no art, while swipe, texts and glows still show.",
       get = function()
         -- arc icons: show the arc override, not customIconID
         local arcID = GetSingleSelectedArcIcon()
@@ -10274,6 +10521,608 @@ function ns.GetCDMCooldownIconsOptionsTable()
       func = function() ResetCooldownSectionSettings("procGlow") end,
     },
     
+    -- COOLDOWN SOUND ALERTS SECTION (2026-08-30)
+    -- Shadow-driven: Ready / On Cooldown / Charge Gained. Works for CDM
+    -- icons and Arc spell/item icons; secret-safe (IsShown transitions).
+    cooldownAlertsHeader = {
+      type = "toggle",
+      name = function() return GetCooldownHeaderName("cooldownAlerts", "Sound Alerts") end,
+      desc = "Click to expand/collapse. Purple dot indicates per-icon customizations.\n\nPlay a sound or speak a line when this spell becomes ready, goes on cooldown, or regains a charge.",
+      dialogControl = "CollapsibleHeader",
+      get = function() return not collapsedSections.cooldownAlerts end,
+      set = function(_, v) collapsedSections.cooldownAlerts = not v end,
+      order = 109.7,
+      width = "full",
+      hidden = function()
+        if HideIfNoCooldownSelection() then return true end
+        if IsEditingMixedTypes() then return true end
+        if IsCurrentCooldownSelectionAllTotem() then return true end
+        if IsCurrentCooldownSelectionAllCustomTimer() then return true end
+        return false
+      end,
+    },
+    cdGrp_ready = {
+      type = "group",
+      inline = true,
+      name = "Ready",
+      order = 109.702,
+      hidden = HideCooldownAlertItems,
+      args = {
+      info = {
+        type = "description",
+        name = "|cff888888The spell comes off cooldown (all charges back, for charge spells).|r",
+        order = 0,
+        width = "full",
+        fontSize = "small",
+      },
+        sndOn = {
+          type = "toggle",
+          name = "Sound",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 1,
+          width = 0.6,
+          hidden = function()
+            return false
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.readySoundOn ~= nil then return a.readySoundOn end
+            return (a and a.readySound) ~= nil
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.readySoundOn = v
+            end)
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        sndFile = {
+          type = "select",
+          dialogControl = "LSM30_Sound",
+          name = "Sound File",
+          desc = "Sound played for this trigger.",
+          order = 2,
+          width = 1.3,
+          values = AlertChoiceValues,
+          hidden = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.readySoundOn ~= nil then return not a.readySoundOn end
+            return (a and a.readySound) == nil
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            return AlertSoundGet(c and c.cooldownAlerts and c.cooldownAlerts.readySound)
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.readySound = (v ~= "None") and v or nil
+            end)
+          end,
+        },
+        ttsOn = {
+          type = "toggle",
+          name = "Speech",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 3,
+          width = 0.6,
+          hidden = function()
+            return false
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.readyTTSOn ~= nil then return a.readyTTSOn end
+            return (a and a.readyTTS) ~= nil
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.readyTTSOn = v
+            end)
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        ttsLine = {
+          type = "input",
+          name = "Line to Speak",
+          desc = "Spoken line for this trigger. Leave empty for no speech.",
+          order = 4,
+          width = 1.3,
+          hidden = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.readyTTSOn ~= nil then return not a.readyTTSOn end
+            return (a and a.readyTTS) == nil
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            return (c and c.cooldownAlerts and c.cooldownAlerts.readyTTS) or ""
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.readyTTS = (v ~= "") and v or nil
+            end)
+          end,
+        },
+      },
+    },
+    cdGrp_cooldown = {
+      type = "group",
+      inline = true,
+      name = "On Cooldown (No Charges)",
+      order = 109.708,
+      hidden = HideCooldownAlertItems,
+      args = {
+      info = {
+        type = "description",
+        name = "|cff888888A normal spell starts its cooldown, or a charge spell spends its last charge.|r",
+        order = 0,
+        width = "full",
+        fontSize = "small",
+      },
+        sndOn = {
+          type = "toggle",
+          name = "Sound",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 1,
+          width = 0.6,
+          hidden = function()
+            return false
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.cooldownSoundOn ~= nil then return a.cooldownSoundOn end
+            return (a and a.cooldownSound) ~= nil
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.cooldownSoundOn = v
+            end)
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        sndFile = {
+          type = "select",
+          dialogControl = "LSM30_Sound",
+          name = "Sound File",
+          desc = "Sound played for this trigger.",
+          order = 2,
+          width = 1.3,
+          values = AlertChoiceValues,
+          hidden = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.cooldownSoundOn ~= nil then return not a.cooldownSoundOn end
+            return (a and a.cooldownSound) == nil
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            return AlertSoundGet(c and c.cooldownAlerts and c.cooldownAlerts.cooldownSound)
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.cooldownSound = (v ~= "None") and v or nil
+            end)
+          end,
+        },
+        ttsOn = {
+          type = "toggle",
+          name = "Speech",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 3,
+          width = 0.6,
+          hidden = function()
+            return false
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.cooldownTTSOn ~= nil then return a.cooldownTTSOn end
+            return (a and a.cooldownTTS) ~= nil
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.cooldownTTSOn = v
+            end)
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        ttsLine = {
+          type = "input",
+          name = "Line to Speak",
+          desc = "Spoken line for this trigger. Leave empty for no speech.",
+          order = 4,
+          width = 1.3,
+          hidden = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.cooldownTTSOn ~= nil then return not a.cooldownTTSOn end
+            return (a and a.cooldownTTS) == nil
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            return (c and c.cooldownAlerts and c.cooldownAlerts.cooldownTTS) or ""
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.cooldownTTS = (v ~= "") and v or nil
+            end)
+          end,
+        },
+      },
+    },
+    cdGrp_recharging = {
+      type = "group",
+      inline = true,
+      name = "On Cooldown (Recharging)",
+      order = 109.714,
+      hidden = HideCooldownAlertItems,
+      args = {
+      info = {
+        type = "description",
+        name = "|cff888888Charge spells only: a charge is spent while at least one charge remains usable.|r",
+        order = 0,
+        width = "full",
+        fontSize = "small",
+      },
+        sndOn = {
+          type = "toggle",
+          name = "Sound",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 1,
+          width = 0.6,
+          hidden = function()
+            return false
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.rechargingSoundOn ~= nil then return a.rechargingSoundOn end
+            return (a and a.rechargingSound) ~= nil
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.rechargingSoundOn = v
+            end)
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        sndFile = {
+          type = "select",
+          dialogControl = "LSM30_Sound",
+          name = "Sound File",
+          desc = "Sound played for this trigger.",
+          order = 2,
+          width = 1.3,
+          values = AlertChoiceValues,
+          hidden = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.rechargingSoundOn ~= nil then return not a.rechargingSoundOn end
+            return (a and a.rechargingSound) == nil
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            return AlertSoundGet(c and c.cooldownAlerts and c.cooldownAlerts.rechargingSound)
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.rechargingSound = (v ~= "None") and v or nil
+            end)
+          end,
+        },
+        ttsOn = {
+          type = "toggle",
+          name = "Speech",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 3,
+          width = 0.6,
+          hidden = function()
+            return false
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.rechargingTTSOn ~= nil then return a.rechargingTTSOn end
+            return (a and a.rechargingTTS) ~= nil
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.rechargingTTSOn = v
+            end)
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        ttsLine = {
+          type = "input",
+          name = "Line to Speak",
+          desc = "Spoken line for this trigger. Leave empty for no speech.",
+          order = 4,
+          width = 1.3,
+          hidden = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.rechargingTTSOn ~= nil then return not a.rechargingTTSOn end
+            return (a and a.rechargingTTS) == nil
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            return (c and c.cooldownAlerts and c.cooldownAlerts.rechargingTTS) or ""
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.rechargingTTS = (v ~= "") and v or nil
+            end)
+          end,
+        },
+      },
+    },
+    cdGrp_charge = {
+      type = "group",
+      inline = true,
+      name = "Charge Gained",
+      order = 109.72,
+      hidden = HideCooldownAlertItems,
+      args = {
+      info = {
+        type = "description",
+        name = "|cff888888Charge spells only: the first charge finishes recharging after being empty. All charges back plays Ready instead.|r",
+        order = 0,
+        width = "full",
+        fontSize = "small",
+      },
+        sndOn = {
+          type = "toggle",
+          name = "Sound",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 1,
+          width = 0.6,
+          hidden = function()
+            return false
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.chargeSoundOn ~= nil then return a.chargeSoundOn end
+            return (a and a.chargeSound) ~= nil
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.chargeSoundOn = v
+            end)
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        sndFile = {
+          type = "select",
+          dialogControl = "LSM30_Sound",
+          name = "Sound File",
+          desc = "Sound played for this trigger.",
+          order = 2,
+          width = 1.3,
+          values = AlertChoiceValues,
+          hidden = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.chargeSoundOn ~= nil then return not a.chargeSoundOn end
+            return (a and a.chargeSound) == nil
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            return AlertSoundGet(c and c.cooldownAlerts and c.cooldownAlerts.chargeSound)
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.chargeSound = (v ~= "None") and v or nil
+            end)
+          end,
+        },
+        ttsOn = {
+          type = "toggle",
+          name = "Speech",
+          desc = "Enable this alert type. Turning it off keeps your pick saved.",
+          order = 3,
+          width = 0.6,
+          hidden = function()
+            return false
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.chargeTTSOn ~= nil then return a.chargeTTSOn end
+            return (a and a.chargeTTS) ~= nil
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.chargeTTSOn = v
+            end)
+            local reg = LibStub("AceConfigRegistry-3.0", true)
+            if reg then reg:NotifyChange("ArcUI") end
+          end,
+        },
+        ttsLine = {
+          type = "input",
+          name = "Line to Speak",
+          desc = "Spoken line for this trigger. Leave empty for no speech.",
+          order = 4,
+          width = 1.3,
+          hidden = function()
+            local c = GetCooldownCfg()
+            local a = c and c.cooldownAlerts
+            if a and a.chargeTTSOn ~= nil then return not a.chargeTTSOn end
+            return (a and a.chargeTTS) == nil
+          end,
+          get = function()
+            local c = GetCooldownCfg()
+            return (c and c.cooldownAlerts and c.cooldownAlerts.chargeTTS) or ""
+          end,
+          set = function(_, v)
+            ApplyCooldownSetting(function(c)
+              c.cooldownAlerts = c.cooldownAlerts or {}
+              c.cooldownAlerts.chargeTTS = (v ~= "") and v or nil
+            end)
+          end,
+        },
+      },
+    },
+    cdAlertChannel = {
+      type = "select",
+      name = "Output Channel",
+      desc = "Which of the game's volume sliders these alert sounds come out of."
+          .. "|n|n|cff888888Master ignores the other sliders, so an alert stays audible even with Sound Effects turned right down. Pick one of the others if you would rather the alert follow a slider you already set.|r",
+      order = 109.735,
+      width = 1.6,
+      values = { Master = "Master", SFX = "Sound Effects", Music = "Music",
+                 Ambience = "Ambience", Dialog = "Dialog" },
+      sorting = { "Master", "SFX", "Music", "Ambience", "Dialog" },
+      hidden = HideCooldownAlertItems,
+      get = function()
+        local c = GetCooldownCfg()
+        return (c and c.cooldownAlerts and c.cooldownAlerts.channel) or "Master"
+      end,
+      set = function(_, v)
+        ApplyCooldownSetting(function(c)
+          c.cooldownAlerts = c.cooldownAlerts or {}
+          c.cooldownAlerts.channel = (v ~= "Master") and v or nil
+        end)
+      end,
+    },
+    -- Shared speech block (mirrors the aura Sound Alerts section): these are
+    -- GLOBAL speech settings (ns.Sounds), deliberately not per-icon.
+    cdAlertVoiceNote = {
+      type = "description",
+      name = "|cff888888Speech settings below are shared: the voice and rate apply to all ArcUI speech, and volume plus the between-messages sound are WoW's own text to speech settings.|r",
+      order = 109.74,
+      width = "full",
+      fontSize = "small",
+      hidden = HideCooldownAlertItems,
+    },
+    cdAlertTTSVoice = {
+      type = "select",
+      name = "Voice",
+      desc = "Default uses the voice picked in WoW's own options (Esc > Options > Accessibility > Text to Speech). Male/Female picks a matching voice from your system list instead.",
+      order = 109.745,
+      width = 1.2,
+      values = {
+        ["default"] = "Default (WoW setting)",
+        ["male"]    = "Male",
+        ["female"]  = "Female",
+      },
+      sorting = { "default", "male", "female" },
+      hidden = HideCooldownAlertItems,
+      get = function()
+        local cfg = ns.Sounds and ns.Sounds.GetTTSConfig and ns.Sounds.GetTTSConfig()
+        return (cfg and cfg.ttsVoiceOverride) or "default"
+      end,
+      set = function(_, v)
+        local cfg = ns.Sounds and ns.Sounds.GetTTSConfig and ns.Sounds.GetTTSConfig()
+        if cfg then cfg.ttsVoiceOverride = v end
+      end,
+    },
+    cdAlertTTSRate = {
+      type = "range",
+      name = "Speech Rate",
+      desc = "How fast the line is spoken. 0 follows WoW's own speech-rate setting.",
+      order = 109.75,
+      width = 1.4,
+      min = -10, max = 10, step = 1,
+      hidden = HideCooldownAlertItems,
+      get = function()
+        local cfg = ns.Sounds and ns.Sounds.GetTTSConfig and ns.Sounds.GetTTSConfig()
+        if cfg and cfg.ttsRateOverride ~= nil then return tonumber(cfg.ttsRateOverride) or 0 end
+        return (C_TTSSettings and C_TTSSettings.GetSpeechRate and C_TTSSettings.GetSpeechRate()) or 0
+      end,
+      set = function(_, v)
+        local cfg = ns.Sounds and ns.Sounds.GetTTSConfig and ns.Sounds.GetTTSConfig()
+        if cfg then cfg.ttsRateOverride = math.floor(v + 0.5) end
+      end,
+    },
+    cdAlertTTSVolume = {
+      type = "range",
+      name = "Speech Volume",
+      desc = "How loud spoken lines are. This is WoW's own text to speech volume, so it also applies to chat narration.",
+      order = 109.755,
+      width = 1.4,
+      min = 0, max = 100, step = 1,
+      hidden = HideCooldownAlertItems,
+      get = function()
+        return (ns.Sounds and ns.Sounds.GetSpeechVolume and ns.Sounds.GetSpeechVolume()) or 100
+      end,
+      set = function(_, v)
+        if ns.Sounds and ns.Sounds.SetSpeechVolume then
+          ns.Sounds.SetSpeechVolume(math.floor(v + 0.5))
+        end
+      end,
+    },
+    cdAlertTTSLineBreakSound = {
+      type = "toggle",
+      name = "Sound Between Messages",
+      desc = "WoW plays a short tick when a spoken line finishes (its |cffffd700Play a sound between each new message|r option).\n\n"
+        .. "It fires for ArcUI speech too, so turn this OFF to lose the tick after every alert.\n\n"
+        .. "|cffff9900This is WoW's own setting: it also affects chat narration.|r",
+      order = 109.76,
+      width = 1.6,
+      hidden = HideCooldownAlertItems,
+      get = function()
+        return (ns.Sounds and ns.Sounds.GetLineBreakSound and ns.Sounds.GetLineBreakSound()) or false
+      end,
+      set = function(_, v)
+        if ns.Sounds and ns.Sounds.SetLineBreakSound then ns.Sounds.SetLineBreakSound(v) end
+      end,
+    },
+    cdAlertTTSPreview = {
+      type = "execute",
+      name = "Test Voice",
+      desc = "Speaks the ready line for the selected icon (or a sample line if it is empty).",
+      order = 109.765,
+      width = 0.9,
+      hidden = HideCooldownAlertItems,
+      func = function()
+        local c = GetCooldownCfg()
+        local ca = c and c.cooldownAlerts
+        local line = ca and (ca.readyTTS or ca.cooldownTTS or ca.chargeTTS)
+        if not line or line == "" then line = "Arc U I text to speech test" end
+        if ns.Sounds and ns.Sounds.SpeakText then ns.Sounds.SpeakText(line) end
+      end,
+    },
+    cdAlertTTSOpenBlizzard = {
+      type = "execute",
+      name = "WoW Speech Options",
+      desc = "Opens WoW's own Text to Speech panel for the full voice list and per-channel chat narration settings.",
+      order = 109.77,
+      width = 1.4,
+      hidden = HideCooldownAlertItems,
+      func = function()
+        if ns.Sounds and ns.Sounds.OpenBlizzardTTSOptions then ns.Sounds.OpenBlizzardTTSOptions() end
+      end,
+    },
+
+
+
     -- ═══════════════════════════════════════════════════════════════════
     -- BORDER SECTION
     -- ═══════════════════════════════════════════════════════════════════
@@ -11915,7 +12764,7 @@ function ns.GetCDMGlobalAuraDefaultsOptionsTable()
       },
       activeStateAlpha = {
         type = "range", name = "Active Alpha", min = 0, max = 1.0, step = 0.05,
-        desc = "Icon visibility when active",
+        desc = "Icon visibility when active. Setting this to 0 also sets Inactive Alpha to 0: in combat the game hides aura state from addons, so a fully hidden active icon requires the Aura Missing look hidden too - they cannot be split at zero.",
         get = function()
           local g = GetAuraGlobalCfg()
           if g.cooldownStateVisuals and g.cooldownStateVisuals.readyState then
@@ -11928,6 +12777,11 @@ function ns.GetCDMGlobalAuraDefaultsOptionsTable()
           if not g.cooldownStateVisuals then g.cooldownStateVisuals = {} end
           if not g.cooldownStateVisuals.readyState then g.cooldownStateVisuals.readyState = {} end
           g.cooldownStateVisuals.readyState.alpha = v
+          -- ZERO-LINK: same rule as the per-icon slider (see there)
+          if v == 0 then
+            if not g.cooldownStateVisuals.cooldownState then g.cooldownStateVisuals.cooldownState = {} end
+            g.cooldownStateVisuals.cooldownState.alpha = 0
+          end
           RefreshGlobalAuras()
         end,
         order = 14.1, width = 0.8,
@@ -12334,7 +13188,7 @@ function ns.GetCDMGlobalAuraDefaultsOptionsTable()
       },
       inactiveStateAlpha = {
         type = "range", name = "Inactive Alpha", min = 0, max = 1.0, step = 0.05,
-        desc = "Icon visibility when inactive",
+        desc = "Icon visibility when inactive.\n\nNote: Masque skins are not yet supported on aura icons - they stay unskinned so no skin piece can cover the live aura.",
         get = function()
           local g = GetAuraGlobalCfg()
           if g.cooldownStateVisuals and g.cooldownStateVisuals.cooldownState then
@@ -15727,7 +16581,7 @@ function ns.GetCDMIconsOptionsTable()
         local itemID = GetInventoryItemID("player", slotID)
         local slotName = (slotID == 13) and "Trinket 1" or "Trinket 2"
         if itemID then
-          local itemName = GetItemInfo(itemID)
+          local itemName = C_Item.GetItemInfo(itemID)
           local isOnUse = ns.ArcAuras and ns.ArcAuras.IsItemOnUse and ns.ArcAuras.IsItemOnUse(itemID)
           local onUseStr = isOnUse and "|cff00ff00On-Use|r" or "|cff888888Passive|r"
           return string.format("|T%s:18|t  |cffffd700%s:|r %s (%s)",
@@ -16230,6 +17084,248 @@ function ns.GetCDMIconsOptionsTable()
   }
   -- (icon override input lives in Icon Appearance's Custom Icon field,
   -- arc-aware with the ID Type selector — no duplicate here)
+
+  -- ── AURA TRACKING (Arc AURA icons): the Add popup's fields on a LIVE
+  -- icon — type, units, Own Auras Only, spell ID ("I forgot Only Mine"
+  -- no longer means delete-and-recreate). All validation and the
+  -- disposition prune live in ns.AuraIcons.UpdateTracking (one path);
+  -- slots rewire immediately, groups re-sync on the queued pass. ──
+  local function GetSingleArcAuraID()
+    local id = GetSingleArcID()
+    if id and id:match("^arc_aura_") and ns.AuraIcons and ns.AuraIcons.Get
+       and ns.AuraIcons.Get(id) then
+      return id
+    end
+    return nil
+  end
+  local function HideAuraTracking() return GetSingleArcAuraID() == nil end
+  local function HideAuraTrackingBody()
+    return HideAuraTracking() or collapsedSections.arcAuraTracking
+  end
+  args.arcAuraTrackHeader = {
+    type = "toggle",
+    name = "Aura Tracking",
+    desc = "Click to expand/collapse.\n\nWhat this icon watches: buff or debuff, on which units, only your own casts or anyone's, and the spell ID. The same choices as the Add window, editable after creation.",
+    dialogControl = "CollapsibleHeader",
+    get = function() return not collapsedSections.arcAuraTracking end,
+    set = function(_, v) collapsedSections.arcAuraTracking = not v end,
+    order = 99.86,
+    width = "full",
+    hidden = HideAuraTracking,
+  }
+  args.arcAuraTrackType = {
+    type = "select",
+    name = "Track",
+    desc = "Buff, debuff, or both. Switching to a debuff drops units that can never be hostile: the game ignores spell-ID filters for debuffs on friendly units, so such an icon would light for ANY debuff.",
+    order = 99.861,
+    width = 0.9,
+    values = { buff = "Buff", debuff = "Debuff", both = "Buff and Debuff" },
+    sorting = { "buff", "debuff", "both" },
+    hidden = HideAuraTrackingBody,
+    get = function()
+      local id = GetSingleArcAuraID()
+      if not id then return "buff" end
+      return (ns.AuraIcons.GetTrackingShape(id)) or "buff"
+    end,
+    set = function(_, v)
+      local id = GetSingleArcAuraID()
+      if not id then return end
+      local _, u = ns.AuraIcons.GetTrackingShape(id)
+      local copy = {}
+      for k, on in pairs(u or {}) do if on then copy[k] = true end end
+      ns.AuraIcons.UpdateTracking(id, { auraType = v, units = copy })
+      LibStub("AceConfigRegistry-3.0"):NotifyChange("ArcUI")
+    end,
+  }
+  args.arcAuraTrackUnitsLbl = {
+    type = "description",
+    name = "|cffaaaaaaLights while the aura is on ANY of the ticked units:|r",
+    order = 99.8615,
+    width = "full",
+    fontSize = "small",
+    hidden = HideAuraTrackingBody,
+  }
+  local AURA_TRACK_UNITS = {
+    { "player", "You" }, { "target", "Target" }, { "focus", "Focus" },
+    { "pet", "Pet" }, { "party", "Party" },
+  }
+  for i, unitDef in ipairs(AURA_TRACK_UNITS) do
+    local unitKey, unitLabel = unitDef[1], unitDef[2]
+    args["arcAuraTrackUnit" .. unitKey] = {
+      type = "toggle",
+      name = unitLabel,
+      order = 99.862 + i * 0.0001,
+      width = 0.6,
+      hidden = function()
+        if HideAuraTrackingBody() then return true end
+        local id = GetSingleArcAuraID()
+        if not id then return true end
+        local t = ns.AuraIcons.GetTrackingShape(id)
+        if t == "buff" then return false end
+        -- non-buff: hostile-capable units, plus You only for a spell the
+        -- game never hides (mirrors UpdateTracking's prune)
+        if unitKey == "target" or unitKey == "focus" then return false end
+        if unitKey == "player" then
+          return not (ns.AuraIcons.DefNeverSecret and ns.AuraIcons.DefNeverSecret(id))
+        end
+        return true
+      end,
+      get = function()
+        local id = GetSingleArcAuraID()
+        if not id then return false end
+        local _, u = ns.AuraIcons.GetTrackingShape(id)
+        return u and u[unitKey] and true or false
+      end,
+      set = function(_, val)
+        local id = GetSingleArcAuraID()
+        if not id then return end
+        local t, u = ns.AuraIcons.GetTrackingShape(id)
+        local copy = {}
+        for k, on in pairs(u or {}) do if on then copy[k] = true end end
+        copy[unitKey] = val and true or nil
+        if not next(copy) then copy[unitKey] = true end   -- never nothing to watch
+        ns.AuraIcons.UpdateTracking(id, { auraType = t, units = copy })
+        LibStub("AceConfigRegistry-3.0"):NotifyChange("ArcUI")
+      end,
+    }
+  end
+  args.arcAuraTrackOwnOnly = {
+    type = "toggle",
+    name = "Own Auras Only",
+    desc = "Only your own casts count (your pet's and your vehicle's too) - other players' copies of the aura are ignored. The same option the Add window offers.",
+    order = 99.864,
+    width = 1.2,
+    hidden = HideAuraTrackingBody,
+    get = function()
+      local id = GetSingleArcAuraID()
+      if not id then return false end
+      local _, _, own = ns.AuraIcons.GetTrackingShape(id)
+      return own
+    end,
+    set = function(_, val)
+      local id = GetSingleArcAuraID()
+      if not id then return end
+      ns.AuraIcons.UpdateTracking(id, { ownOnly = val and true or false })
+      LibStub("AceConfigRegistry-3.0"):NotifyChange("ArcUI")
+    end,
+  }
+  args.arcAuraTrackSpellID = {
+    type = "input",
+    dialogControl = "ArcUI_EditBox",
+    name = "Spell ID",
+    desc = "Change which aura this icon watches. The icon keeps its look, position, and group placement - only the tracked spell changes (name and art follow the new spell).",
+    order = 99.865,
+    width = 0.8,
+    hidden = function()
+      if HideAuraTrackingBody() then return true end
+      local id = GetSingleArcAuraID()
+      if not id then return true end
+      local _mt, _mu, _mo, _msid, multi = ns.AuraIcons.GetTrackingShape(id)
+      return multi and true or false
+    end,
+    get = function()
+      local id = GetSingleArcAuraID()
+      if not id then return "" end
+      local _t, _u, _o, spellID = ns.AuraIcons.GetTrackingShape(id)
+      return spellID and tostring(spellID) or ""
+    end,
+    set = function(_, v)
+      local id = GetSingleArcAuraID()
+      if not id then return end
+      -- extra parens: gsub's second return must not land in tonumber's base
+      local newID = tonumber(((v or ""):gsub("%D", "")))
+      if not newID then return end
+      local ok, err = ns.AuraIcons.UpdateTracking(id, { spellID = newID })
+      if not ok and err then
+        print("|cff00CCFF[Arc Auras]|r " .. err)
+      end
+      LibStub("AceConfigRegistry-3.0"):NotifyChange("ArcUI")
+    end,
+  }
+  args.arcAuraTrackMultiNote = {
+    type = "description",
+    name = "|cff8298b4This icon tracks a fixed list of spells (a preset or CDM import), so its IDs are not editable - everything above still applies to the whole list.|r",
+    order = 99.8655,
+    width = "full",
+    fontSize = "small",
+    hidden = function()
+      if HideAuraTrackingBody() then return true end
+      local id = GetSingleArcAuraID()
+      if not id then return true end
+      local _mt, _mu, _mo, _msid, multi = ns.AuraIcons.GetTrackingShape(id)
+      return not multi
+    end,
+  }
+
+  -- ── TOTEM SLOTS (totem selection): the same master + per-slot switches
+  -- that live in Add Arc Icon > Totem Slots, surfaced when a totem slot
+  -- icon is selected in the catalog (Arc's ask 2026-09-14). Like trinket
+  -- auto-track icons, totem icons are RECREATED from the slot setup at
+  -- every login — these switches are the honest controls, so they must be
+  -- reachable from the icon itself. ──
+  local function GetSingleArcTotemSlot()
+    local id = GetSingleArcID()
+    if not (id and ns.ArcAurasTotems and ns.ArcAurasTotems.ParseID) then return nil end
+    return ns.ArcAurasTotems.ParseID(id)
+  end
+  local function HideTotemSlotSection() return GetSingleArcTotemSlot() == nil end
+  local function HideTotemSlotBody()
+    return HideTotemSlotSection() or collapsedSections.arcTotemSlots
+  end
+  args.arcTotemHeader = {
+    type = "toggle",
+    name = "Totem Slots",
+    desc = "Click to expand/collapse.\n\nThe totem slot switches - the same controls as Add Arc Icon > Totem Slots.",
+    dialogControl = "CollapsibleHeader",
+    get = function() return not collapsedSections.arcTotemSlots end,
+    set = function(_, v) collapsedSections.arcTotemSlots = not v end,
+    order = 99.87,
+    width = "full",
+    hidden = HideTotemSlotSection,
+  }
+  args.arcTotemDesc = {
+    type = "description",
+    name = "|cffaaaaaaTotem slot icons are managed by these switches: each icon is recreated from the slot setup at login (like auto-tracked trinkets), so turn a slot off HERE rather than removing its icon.|r",
+    order = 99.8705,
+    width = "full",
+    fontSize = "small",
+    hidden = HideTotemSlotBody,
+  }
+  args.arcTotemEnable = {
+    type = "toggle",
+    name = "Enable Totem Slot Tracking",
+    desc = "Show an icon for each of your totem slots.",
+    order = 99.871,
+    width = 1.5,
+    hidden = HideTotemSlotBody,
+    get = function() return ns.ArcAurasTotems and ns.ArcAurasTotems.IsEnabled() end,
+    set = function(_, v)
+      if ns.ArcAurasTotems then ns.ArcAurasTotems.SetEnabled(v) end
+      LibStub("AceConfigRegistry-3.0"):NotifyChange("ArcUI")
+    end,
+  }
+  for slot = 1, 8 do
+    local thisSlot = slot
+    args["arcTotemSlot" .. thisSlot] = {
+      type = "toggle",
+      name = "Slot " .. thisSlot,
+      desc = "Track totem slot " .. thisSlot .. ".",
+      order = 99.871 + thisSlot * 0.0001,
+      width = 0.7,
+      hidden = function()
+        if HideTotemSlotBody() then return true end
+        if not (ns.ArcAurasTotems and ns.ArcAurasTotems.IsEnabled()) then return true end
+        return thisSlot > ns.ArcAurasTotems.GetNumSlots()
+      end,
+      get = function()
+        return ns.ArcAurasTotems and ns.ArcAurasTotems.IsSlotEnabled(thisSlot)
+      end,
+      set = function(_, v)
+        if ns.ArcAurasTotems then ns.ArcAurasTotems.SetSlotEnabled(thisSlot, v) end
+        LibStub("AceConfigRegistry-3.0"):NotifyChange("ArcUI")
+      end,
+    }
+  end
 
   -- ── CUSTOM TIMER EDITOR (mounted from the Custom Icons tab) ──
   -- Every "editor*" entry of the Custom Icons options table is copied in

@@ -29,6 +29,177 @@ local C_DESC  = "ffb0b0b0"  -- entry description
 -- ===================================================================
 CL.versions = {
   {
+    version = "3.8.10",
+    sections = {
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "New Icons Load Only On Their Spec", desc = "A newly created aura icon or arc icon now loads only on the spec it was created on instead of all specs. Widen it any time with the spec checkboxes in Load Conditions; existing icons are unchanged." },
+          { title = "Totem Slot Controls in the Icon Catalog", desc = "Selecting a totem slot icon in the Icon Catalog now shows the totem tracking switches (the master toggle and each per-slot toggle) right there, instead of only in the Add Arc Icon section." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Totem Slot Dragging", desc = "Free-placed totem slot icons could permanently lose their dragging after a spec change or reload while everything else about them looked fine. They now stay movable." },
+          { title = "Spec Settings Survive Profile Sync", desc = "With shared same-class profiles, unchecking specs or setting talent conditions on a synced character no longer gets reverted at the next login. Each character now keeps its own load conditions; everything else still syncs from the source as before." },
+          { title = "Masque Skins at Login", desc = "Masque skins now apply right at login. Previously they could silently stay off for the whole session until the options panel was opened once." },
+          { title = "Tooltips on Reappearing Groups", desc = "Icons in groups shown by visibility conditions (for example combat-only groups) no longer come back with their tooltip behavior flipped against your settings." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.8.9",
+    sections = {
+      {
+        header = "New Features", color = C_NEW, items = {
+          { title = "Aura Tracking Editor", desc = "Aura icons can now be edited after creation: select one in the Icon Catalog and the new Aura Tracking section changes what it watches - buff or debuff, which units, Own Auras Only, even the spell ID - while the icon keeps its look, position, and group placement. No more delete-and-recreate because one option was missed." },
+          { title = "Loot Planner Guide Buttons", desc = "The bar inside the Adventure Guide now carries a Set Up button that opens the Loot Planner options directly, and a small x that can switch the whole module off right from the guide (re-enable any time in Settings > Modules). Gear scanning moved into the Loot Planner options tab." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Masque and Aura Icons", desc = "With Masque enabled, aura icons no longer show broken skin pieces (empty silver border squares, a backdrop covering the live aura), and they keep their own Zoom, Aspect Ratio, and Padding instead of losing them to Masque - the sliders stay editable too. Masque skinning is not yet supported on aura icons (a proper version is planned), so they now stay cleanly under ArcUI's control; every other icon type is unaffected." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.8.8.a",
+    sections = {
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Guided Tour", desc = "Fixed the tour highlight getting stuck on screen or showing up in combat. The tour now runs only from the options panel and cleans up completely when you leave it." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.8.8",
+    sections = {
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "Loot Planner", desc = "Now ships knowing every class and spec's loot for the current raids and Mythic+ season and keeps its lists fresh on its own - every page is full from the first open, the Mythic+ drops page works even without a sim, and old-content coins or slow loading can no longer leave the overview on the wrong raid or half-filled." },
+          { title = "Loot Planner", desc = "Item tooltips show the real item at the right item level (sim-priced items at the exact level your sim used), items best used through the Catalyst are tagged with the set piece they become, and tooltips open at your cursor." },
+          { title = "Loot Planner", desc = "Smarter sims: healers can import QE Live Upgrade Finder reports, a sim finds its own character and spec on import, a drop and its Catalyst conversion count as one roll instead of two, and owned checks no longer trigger off an alt's lower-difficulty version." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Aura Groups", desc = "Targeting yourself or a friendly player no longer fills tracked-debuff slots with random debuffs; those slots now stay empty until you have a valid target, while utility debuffs that always identify keep working everywhere." },
+          { title = "Aura Groups", desc = "Only Mine is respected in the live view: another player's copy of a debuff you track no longer shows in your row." },
+          { title = "Aura Groups", desc = "Changing targets updates the row immediately, in combat too." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.8.7",
+    sections = {
+      {
+        header = "New Features", color = C_NEW, items = {
+          { title = "Loot Planner", desc = "A whole new module: your Raidbots sims in the game. Every raid boss and item shows a real DPS value in the Adventure Guide, bonus rolls get planned instead of guessed, coins are protected from accidental rolls, and your roll history is tracked. Plan reminders pop at the vault and when you earn coins, sims and loot pools are saved per spec, and it all lives under one tab with a single master switch. Goes dormant automatically if you run the standalone Arc Loot Planner addon." },
+          { title = "Loot Planner Tour", desc = "The first time you open ArcUI's options on this version, a short guided tour offers to walk you through the new Loot Planner: sims, planning, protection, and the Adventure Guide view." },
+          { title = "Module Switches", desc = "Settings now opens with a Modules section: master toggles for Castbar, Kick Assist, Pings, and Loot Planner. Turning one off disables the whole module on the spot and hides its tab until you switch it back on." },
+          { title = "Transparent Icons", desc = "Setting Custom Icon to 0 (or Show Icon off) hides the icon art while glows, cooldown swipe, and texts keep working - track procs on an invisible icon again, like the old days." },
+          { title = "Kick Assist Window", desc = "The ready-check window is now titled ArcUI Kick Assist and carries its own Enable Kick Assist checkbox, so you can switch the whole helper off right from the popup." },
+        },
+      },
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "Honest Aura Alphas", desc = "On aura icons, Aura Active alpha 0 now truly hides everything, and setting it to 0 also sets Inactive alpha to 0 (in combat the game hides aura state from addons, so the two cannot be split at zero - the tooltips now explain this)." },
+          { title = "Addon Icon", desc = "ArcUI now shows its own icon in the AddOns list, and the minimap button's icon sits centered in its ring." },
+          { title = "Future-Proof Item Lookups", desc = "Item icons, keybind detection, and cooldown reminders moved to the current item APIs so deprecated-function errors can't bite." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Tooltips After Hiding the UI", desc = "Disabled icon tooltips no longer come back after hiding and re-showing the interface (Alt+Z or cinematics)." },
+          { title = "Arc Icons After Spec Swap", desc = "Icons created mid-session or after a spec change now respect click-through and tooltip settings immediately, without opening the options panel." },
+          { title = "Groups Borrowing Other Specs' Positions", desc = "A new group can no longer silently adopt another spec's stored anchoring from a shared layout set; renaming onto a stored record is guarded too." },
+          { title = "Group Columns Growing Back", desc = "Auto-reflow groups no longer regrow a deleted column on reload from a stale saved slot." },
+          { title = "Aura Group Sizing", desc = "Aura group icons keep their exact size when the options panel closes, and per-icon size overrides now apply in the live view." },
+          { title = "Debuffs in Aura Groups", desc = "Debuff icons added to a dynamic aura group now show up in the live view and share the row with buffs, in grid order." },
+          { title = "Duplicate Aura Rows", desc = "Fixed whole rows of identical aura copies appearing after vehicles, cinematics, or encounter ends; the group now self-repairs its filters." },
+          { title = "Blizzard Proc Glow Color", desc = "Custom colors on the Blizzard Proc glow now render true on aura icons instead of tinted gold." },
+          { title = "Black Box on Invisible Icons", desc = "Aura icons no longer show a black square at Active alpha 0, or a dark backing at partial alpha when the Missing look is hidden." },
+          { title = "Segmented Bars Losing Customizations", desc = "Segmented stack bars no longer lose textures and colors outside the options panel, including textures from addons that load late." },
+          { title = "Segmented Colors on Custom Aura Bars", desc = "Color Ranges and Per Stack Overrides now render on engine-driven custom aura bars: matching shades, tick marks aligned to the fill, and range boundaries landing on the exact stack." },
+          { title = "Custom Bar Spell ID", desc = "Typing a new spell ID for a custom bar no longer errors and reverts to the old ID." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.8.6.a",
+    sections = {
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Custom Icons Switching in Combat", desc = "A custom icon no longer switches back to the spell's default art during combat when Ignore Aura Override is enabled on the same icon. The custom icon always wins." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.8.6",
+    sections = {
+      {
+        header = "New Features", color = C_NEW, items = {
+          { title = "Cooldown Sound Alerts", desc = "Icons can now play a sound or speak a line on cooldown events: Ready, On Cooldown (No Charges), On Cooldown (Recharging), and Charge Gained. Each trigger has its own sound and speech toggles, an output channel picker, and works on CDM icons and Arc spell/item icons alike - in dungeons and raids too." },
+          { title = "Icon Copies", desc = "Adding a spell or item you already track now creates another copy of it (\"Stormstrike (2)\") instead of doing nothing. Each copy is a full icon with its own settings and placement - up to 5 per spell, great for charge spells and multi-position layouts." },
+          { title = "Target Castbar", desc = "A third castbar for your current target, with the full option set the player and focus bars have: interrupt readiness, uninterruptible color, important-cast glow, raid marker, and more." },
+          { title = "Castbar Skins for Focus and Target", desc = "The skin system now covers all three castbars, sharing one skin list: save a look once and load it on any bar. Auto-switch rules (per spec, with talent conditions) work on the focus and target bars too." },
+          { title = "Castbar Class Color", desc = "New toggle to color the player castbar with your class color." },
+          { title = "Focus Hide Conditions", desc = "Bars gained \"No Focus Target\" and \"Has Focus Target\" hide conditions." },
+          { title = "Editable Spell ID on Custom Bars", desc = "A custom aura bar's spell ID can now be changed in place - the bar and its catalog entry follow immediately, no delete-and-recreate." },
+          { title = "Hide Stack Text at 0", desc = "Cooldown Manager tracked bars that stay visible while their aura is down can now blank the stack number instead of showing 0." },
+        },
+      },
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "Sound Alerts Panel Rework", desc = "Both alert panels (aura and cooldown) now show each trigger in its own titled box with separate Sound and Speech toggles, so you can enable one, both, or neither per trigger. \"None\" now sits at the top of every sound list." },
+          { title = "Stack Numbers From 1", desc = "Stack text on bars now shows from the first stack instead of only at 2 or more." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Removing a Row or Column With Icons", desc = "Shrinking a group no longer makes the icon in the removed space invisible (and no longer grows the column back on reload). Icons move to a free slot when there is room; when the group is full, the removal is refused with a message instead of losing an icon." },
+          { title = "Some Alert Sounds Never Played", desc = "Sounds from certain packs (like the Arc Pings set) were silently failing to play in aura alerts. They play now." },
+          { title = "Deleted Custom Bars Coming Back", desc = "Deleting a custom aura bar and creating a new one no longer resurrects the deleted bar's tracking." },
+          { title = "Ghost Bar After Changing a Bar's Spell", desc = "Reconfiguring a bar to a different aura no longer leaves the old aura still driving the fill and text." },
+        },
+      },
+    },
+  },
+  {
+    version = "3.8.5",
+    sections = {
+      {
+        header = "New Features", color = C_NEW, items = {
+          { title = "Aura Bar Targets", desc = "When you add your own aura bar, you can now choose what it tracks (buffs, debuffs, or both) and who it watches (you, your target, focus, pet, or party members - any combination). There is also a toggle to only show auras you applied yourself. The add window now looks and works like the one in the icon catalog, and everything can be changed later per bar." },
+          { title = "Alert Sound Channel", desc = "Aura icon alert sounds can now play through whichever volume slider you pick (Master, Sound Effects, Music, Ambience, or Dialog)." },
+          { title = "New Sounds", desc = "Added \"Ultra Instinct\" and \"Ultra Instinct Theme\" to the sound list, usable anywhere you can pick a sound." },
+        },
+      },
+      {
+        header = "Improvements", color = C_IMP, items = {
+          { title = "Glow Settings Pass", desc = "All the glow options (position, size, layering) now actually work on every glow type, for both CDM icons and Arc icons - several of them previously did nothing. Glows also no longer sit slightly off-center when padding is set, and the marching-ants glow no longer restarts from the beginning every time you cast while using Masque." },
+          { title = "Cooldown Reminder Big Cooldowns", desc = "Reminders now work reliably for spells with long cooldowns (like 3 to 5 minute cooldowns) - previously the reminder could give up before the spell came back." },
+        },
+      },
+      {
+        header = "Bug Fixes", color = C_FIX, items = {
+          { title = "Icons Showing the Wrong Cooldown After Talent Changes", desc = "After changing talents or Cooldown Manager settings, icons could look ready while the spell was actually on cooldown (or look on cooldown while ready) until you cast something. Icons now always show the right state immediately." },
+          { title = "Groups Growing Extra Columns", desc = "Fixed groups growing extra columns or moving icons around on their own after talent changes, especially with shared or imported layouts." },
+          { title = "Icons Swapping Places", desc = "Icons in dynamic groups no longer trade spots back and forth for no reason." },
+          { title = "Giant Icon on Screen", desc = "Fixed a rare bug where an icon could suddenly appear huge in the middle of the screen." },
+          { title = "Masque Background Stuck On", desc = "With Masque on, an icon's skin background no longer stays visible when the icon itself is hidden." },
+          { title = "Castbar Stuck After Loading Screens", desc = "Finishing a cast right as a loading screen hits (Hearthstone, dungeon teleports) no longer leaves the castbar frozen on your screen." },
+          { title = "Custom Aura Bars Lost on Import", desc = "Sharing your bar setup with someone (or another character) no longer breaks manually added aura bars." },
+        },
+      },
+    },
+  },
+  {
     version = "3.8.4",
     sections = {
       {
@@ -759,8 +930,10 @@ local function BuildFrame()
     if fp then tfs:SetFont(fp, 14, fl) end
   end
   tour:SetScript("OnClick", function()
-    f:Hide()
-    if ns.Tour and ns.Tour.Start then ns.Tour.Start() end
+    -- Start carries the walls (no combat, options panel required): only
+    -- close this window when the tour actually began, so a refusal (with
+    -- its printed reason) leaves the player where they were.
+    if ns.Tour and ns.Tour.Start and ns.Tour.Start() then f:Hide() end
   end)
   f._tourBtn = tour
 

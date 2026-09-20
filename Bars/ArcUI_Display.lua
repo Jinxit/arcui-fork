@@ -109,6 +109,61 @@ end
 local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
 
 -- ===================================================================
+-- AURA LANES (12.1 engine bars) — one resolver for every BD attach site.
+-- A lane is (unit token, aura filter); each lane becomes its own engine
+-- slot stacked on the same bar, so the set reads as an OR: the bar fills
+-- when ANY lane's unit carries the aura (the aura icons' proven model).
+-- New-style custom bars store tracking.auraUnits { player/target/focus/
+-- pet/party = true } + tracking.auraOwnOnly, with trackType buff|debuff|
+-- both as the aura type. When auraUnits is absent (every CDM bar and
+-- every pre-existing custom), the LEGACY implied lane applies unchanged:
+-- buff -> player/HELPFUL, debuff -> target/HARMFUL|PLAYER (own-only, the
+-- Colossus Smash rule), petbuff -> pet/HELPFUL.
+-- ===================================================================
+local LANE_UNIT_TOKENS = {
+  player = { "player" }, target = { "target" }, focus = { "focus" },
+  pet = { "pet" }, party = { "party1", "party2", "party3", "party4" },
+}
+local LANE_UNIT_ORDER = { "player", "target", "focus", "pet", "party" }
+
+local function ResolveAuraLanes(tracking)
+  local lanes = {}
+  local tt = (tracking and tracking.trackType) or "buff"
+  local units = tracking and tracking.auraUnits
+  if type(units) == "table" and next(units) then
+    local own = tracking.auraOwnOnly and "|PLAYER" or ""
+    for _, choice in ipairs(LANE_UNIT_ORDER) do
+      if units[choice] then
+        -- HARMFUL lanes only on units that CAN be hostile (target/focus) —
+        -- the engine's spell-ID filter is only applied when the aura type
+        -- matches the unit's disposition, so a debuff lane on a permanently
+        -- friendly unit silently matches ANY debuff (the icon picker prunes
+        -- these combos for the same reason; this is the data-level guard).
+        local canBeHostile = (choice == "target" or choice == "focus")
+        for _, token in ipairs(LANE_UNIT_TOKENS[choice]) do
+          if tt ~= "debuff" then lanes[#lanes + 1] = { unit = token, filter = "HELPFUL" .. own } end
+          if tt ~= "buff" and canBeHostile then lanes[#lanes + 1] = { unit = token, filter = "HARMFUL" .. own } end
+        end
+      end
+    end
+  end
+  if #lanes == 0 then
+    -- legacy implied lane — must stay EXACTLY the pre-auraUnits behavior
+    if tt == "debuff" then
+      lanes[1] = { unit = "target", filter = "HARMFUL|PLAYER" }
+    elseif tt == "petbuff" then
+      lanes[1] = { unit = "pet", filter = "HELPFUL" }
+    else
+      lanes[1] = { unit = "player", filter = "HELPFUL" }
+    end
+  end
+  local parts = {}
+  for i, l in ipairs(lanes) do parts[i] = l.unit .. ":" .. l.filter end
+  return lanes, table.concat(parts, ",")
+end
+ns.Display.ResolveAuraLanes = ResolveAuraLanes
+
+-- ===================================================================
 -- INITIALIZATION FLAG: Prevent bar flash during reload
 -- Bars stay hidden until initialization completes (after PLAYER_ENTERING_WORLD + delay)
 -- ===================================================================
@@ -342,6 +397,7 @@ local function GetDurationColorCurve(barNumber, barConfig)
   durationColorCurves[barNumber] = { curve = curve, settingsHash = currentHash }
   return curve
 end
+
 
 -- Clear cached curve for a bar (called when settings change)
 function ns.Display.ClearDurationColorCurve(barNumber)
@@ -817,6 +873,33 @@ function ns.Display.BumpConfigVersion(barNumber)
     barConfig._configVersion = (barConfig._configVersion or 0) + 1
     barAppearanceApplied[barNumber] = -1  -- Force refresh
   end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- LSM LATE REGISTRATION: a media pack can register its textures AFTER our
+-- first update pass tried to fetch them (login order race - ArcUI loads
+-- alphabetically early). When any statusbar medium lands, bust the per-frame
+-- texture caches and re-run the bars once. Burst-collapsed to one refresh
+-- per registration wave; fires only when media registers, zero idle cost.
+-- ═══════════════════════════════════════════════════════════════════════════
+if LSM and LSM.RegisterCallback then
+  local lsmRefreshQueued = false
+  LSM.RegisterCallback(ns.Display, "LibSharedMedia_Registered", function(_, mediatype)
+    if mediatype ~= "statusbar" then return end
+    for _, entry in pairs(ns.Display._barFrames or {}) do
+      local bf = entry and entry.barFrame
+      if bf then
+        bf._cachedTexturePath = nil
+        bf._lastConfigVersion = nil
+      end
+    end
+    if lsmRefreshQueued then return end
+    lsmRefreshQueued = true
+    C_Timer.After(0.25, function()
+      lsmRefreshQueued = false
+      if ns.Display.RefreshAllBars then ns.Display.RefreshAllBars() end
+    end)
+  end)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -1852,8 +1935,18 @@ local function UpdateTickMarks(barFrame, barConfig, maxValue, displayMode)
     local _, _hpx = GetPhysicalScreenSize()
     local onePx = (_hpx and _hpx > 0 and scale and scale > 0) and (768 / _hpx) / scale or 1
 
+    -- ENGINE-DRIVEN (custom aura) segment bars: the engine fill spans the
+    -- FULL frame - there are no classic segments to inset around - so the
+    -- ticks must span it too. Insetting them put tick 1 past the 1-stack
+    -- fill edge (Arc's report); re-pinning the geometry host instead broke
+    -- the layers' baked widths, so the TICKS follow the FILL, never the
+    -- other way around.
+    local engineFill = barConfig.tracking and barConfig.tracking.customAura
+      and (displayMode == "granular" or displayMode == "perStack")
+
     local segInset = 0
-    if barConfig.display.showBorder and (displayMode == "granular" or displayMode == "perStack") then
+    if barConfig.display.showBorder and not engineFill
+       and (displayMode == "granular" or displayMode == "perStack") then
       local btRaw = barConfig.display.drawnBorderThickness or 2
       segInset = onePx * btRaw
     end
@@ -1863,7 +1956,8 @@ local function UpdateTickMarks(barFrame, barConfig, maxValue, displayMode)
     -- honours the padding (granular/perStack segments + duration bars) —
     -- simple-mode fills don't inset, so their ticks don't either.
     local padL, padR, padT, padB = 0, 0, 0, 0
-    if displayMode == "granular" or displayMode == "perStack" or displayMode == "duration" then
+    if not engineFill
+       and (displayMode == "granular" or displayMode == "perStack" or displayMode == "duration") then
       padL = (barConfig.display.barPaddingL or 0) * onePx
       padR = (barConfig.display.barPaddingR or 0) * onePx
       padT = (barConfig.display.barPaddingT or 0) * onePx
@@ -2744,14 +2838,33 @@ function ns.Display.UpdateBar(barNumber, stacks, maxStacks, active, durationFont
   local texturePath = barFrame._cachedTexturePath
   if needsSetup or not texturePath then
     texturePath = "Interface\\TargetingFrame\\UI-StatusBar"
-    if LSM and barConfig.display.texture then
-      local fetchedTexture = LSM:Fetch("statusbar", barConfig.display.texture)
-      if fetchedTexture then texturePath = fetchedTexture end
+    local wantTexture = barConfig.display.texture
+    local textureMissing = false
+    if LSM and wantTexture then
+      -- noDefault fetch: nil = the medium is not registered YET (a media
+      -- pack loading after our first update - the login order race).
+      -- Without it Fetch hands back LSM's default, which then got CACHED
+      -- and version-locked: the segmented-vs-continuous split, because the
+      -- continuous bar is re-textured by ApplyAppearance's fresh fetch
+      -- while segments only ever read this cache.
+      local fetchedTexture = LSM:Fetch("statusbar", wantTexture, true)
+      if fetchedTexture then
+        texturePath = fetchedTexture
+      else
+        textureMissing = true
+      end
     end
-    barFrame._cachedTexturePath = texturePath
+    if textureMissing then
+      -- fallback for THIS call only - never cache a miss, and keep
+      -- needsSetup true (version unlocked) so every call retries until the
+      -- configured texture registers; the LSM callback also busts on landing
+      barFrame._cachedTexturePath = nil
+    else
+      barFrame._cachedTexturePath = texturePath
+    end
     -- Only lock in the config version when options are closed — while options are
     -- open the user may change settings every call, so always re-evaluate needsSetup
-    if not optionsOpen then
+    if not optionsOpen and not textureMissing then
       barFrame._lastConfigVersion = currentConfigVersion
     end
   end
@@ -3398,7 +3511,15 @@ function ns.Display.UpdateBar(barNumber, stacks, maxStacks, active, durationFont
       -- engine ArcStacks overlays the live count; blank ours (customs pass 0)
       textFrame.text:SetText("")
     else
-      textFrame.text:SetText(stacks)
+      -- CDM-sourced bars: at aura-absent the update passes stacks=0, so a
+      -- bar kept visible while inactive renders "0". Opt-in "Hide Stack
+      -- Text at 0" blanks it while INACTIVE -- gated on the Lua-known
+      -- `active` flag, never a compare of the (secret) count.
+      if not active and barConfig.display.stackHideAtZero then
+        textFrame.text:SetText("")
+      else
+        textFrame.text:SetText(stacks)
+      end
     end
     local tc = barConfig.display.textColor
     textFrame.text:SetTextColor(tc.r, tc.g, tc.b, tc.a)
@@ -3649,12 +3770,8 @@ function ns.Display.UpdateBar(barNumber, stacks, maxStacks, active, durationFont
       barFrame._arcStackDurHost = host
     end
     host:Show()
-    local sdUnit = "player"
-    if barConfig.tracking.trackType == "debuff" then
-      sdUnit = "target"
-    elseif barConfig.tracking.trackType == "petbuff" then
-      sdUnit = "pet"
-    end
+    local sdLanes, sdLanesKey = ResolveAuraLanes(barConfig.tracking)
+    local sdUnit = sdLanes[1].unit
     local sdCd = barConfig.tracking.cooldownID
     local sdTs = barConfig.tracking.trackedSpellID or barConfig.tracking.spellID
     local sdFmt, sdColorKey
@@ -3674,6 +3791,8 @@ function ns.Display.UpdateBar(barNumber, stacks, maxStacks, active, durationFont
       tostring(barNumber), tostring(sdCd), tostring(sdTs), sdUnit,
       tostring(sdColorKey), tostring(barConfig.display.durationTextColorEnabled))) end
     ns.BarDuration.Attach(host, durationFrame and durationFrame.text, sdCd, sdTs, sdUnit, {
+      lanes = sdLanes,
+      lanesKey = sdLanesKey,
       showDuration = true,
       durFontPath = sdFontPath,
       durFontSize = barConfig.display.durationFontSize or 18,
@@ -3742,7 +3861,8 @@ function ns.Display.UpdateBar(barNumber, stacks, maxStacks, active, durationFont
     barFrame.bar:SetOrientation(barOrientation)
     barFrame.bar:SetReverseFill(isBarReverseFill)
     barFrame.bar:SetRotatesTexture(rotateBarTex)
-    local bdUnit = (barConfig.tracking.trackType == "debuff") and "target" or "player"
+    local bdLanes, bdLanesKey = ResolveAuraLanes(barConfig.tracking)
+    local bdUnit = bdLanes[1].unit
     local bdDurFmt, bdColorKey
     if barConfig.display.durationTextColorEnabled and ns.DurationText and ns.DurationText.GetLiveSecondsColorFormatter then
       -- persistent per-fs formatter (live band-edit application, see DT)
@@ -3771,15 +3891,57 @@ function ns.Display.UpdateBar(barNumber, stacks, maxStacks, active, durationFont
     if naturalFill then engineBaseColor = { r = 1, g = 1, b = 1, a = 1 } end
     do
       local list = {}
-      for i = 2, 6 do
-        local th = thresholds[i]
-        if th and th.enabled and th.color and not naturalFill then
-          local v = GetThresholdValue(th.minValue, nil, thresholdAsPercent, maxStacks)
-          v = v and math_floor(v + 0.5)
-          if v and v > 1 and v <= maxStacks then list[#list + 1] = { v = v, color = th.color } end
+      -- SEGMENTED (perStack) bars color by the EXPANDED per-stack map:
+      -- Color Ranges and Per Stack Override both write cfg.stackColors, and
+      -- the classic segment painter reads exactly that - the thresholds
+      -- table is the CONTINUOUS system's store. Building the engine bands
+      -- from thresholds only left engine-driven (custom aura) segmented
+      -- bars single-colored while the panel preview (classic painter)
+      -- showed the ranges (Arc's report, 2026-09-07). Contiguous same-color
+      -- RUNS become the band boundaries; colors stay OUT of bandsKey
+      -- (pushed live by BD), structural changes rewire.
+      local runsBuilt = false
+      if displayMode == "perStack" and not naturalFill then
+        local sc = barConfig.stackColors
+        local useMax = barConfig.display.enableMaxColor
+        if (sc and next(sc)) or useMax then
+          local function colAt(i)
+            if useMax and i == maxStacks then
+              return barConfig.display.maxColor or { r = 0, g = 1, b = 0, a = 1 }
+            end
+            return (sc and sc[i]) or baseColor
+          end
+          local function sameC(a, b)
+            return a == b or (a and b and a.r == b.r and a.g == b.g
+              and a.b == b.b and (a.a or 1) == (b.a or 1))
+          end
+          local prev = colAt(1)
+          for i = 2, maxStacks do
+            local c = colAt(i)
+            if not sameC(c, prev) then
+              list[#list + 1] = { v = i, color = c }
+              prev = c
+            end
+          end
+          -- every boundary is one engine overlay slot PER LANE: cap the
+          -- composition (highest boundaries dropped past the cap)
+          while #list > 7 do table.remove(list) end
+          baseColor = colAt(1)        -- the band chain's below-first color
+          engineBaseColor = colAt(1)  -- uniform custom color, no boundaries
+          runsBuilt = true
         end
       end
-      table.sort(list, function(x, y) return x.v < y.v end)
+      if not runsBuilt then
+        for i = 2, 6 do
+          local th = thresholds[i]
+          if th and th.enabled and th.color and not naturalFill then
+            local v = GetThresholdValue(th.minValue, nil, thresholdAsPercent, maxStacks)
+            v = v and math_floor(v + 0.5)
+            if v and v > 1 and v <= maxStacks then list[#list + 1] = { v = v, color = th.color } end
+          end
+        end
+        table.sort(list, function(x, y) return x.v < y.v end)
+      end
       if #list > 0 then
         local parts = {}
         -- The Style dropdown maps Segmented = thresholdMode "perStack" ONLY;
@@ -3796,12 +3958,17 @@ function ns.Display.UpdateBar(barNumber, stacks, maxStacks, active, durationFont
           end
         else
           -- SEGMENTED: region band coloring (width-stretch overlays; smaller
-          -- thresholds drawn on top; base slot renders the top band's color)
+          -- thresholds drawn on top; base slot renders the top band's color).
+          -- e.v = the FIRST stack of the NEW color, so the below-color band
+          -- must stop one stack short: an overlay saturating at max = v
+          -- paints stack v's own segment in the OLD color (Arc's "8 blue
+          -- squares from a 1-7 range" report) - max = v - 1 covers exactly
+          -- stacks 1..v-1 and stack v shows the layer beneath.
           applicationBands = {}
           local below = baseColor
           for i, e in ipairs(list) do
             applicationBands[#applicationBands + 1] = {
-              max = e.v, widthFrac = e.v / maxStacks,
+              max = e.v - 1, widthFrac = (e.v - 1) / maxStacks,
               color = below, boost = #list - i + 1,
             }
             parts[#parts + 1] = "b" .. e.v
@@ -3814,6 +3981,8 @@ function ns.Display.UpdateBar(barNumber, stacks, maxStacks, active, durationFont
     end
     ns.BarDuration.Attach(barFrame, durationFrame and durationFrame.text,
       nil, barConfig.tracking.trackedSpellID, bdUnit, {
+      lanes = bdLanes,
+      lanesKey = bdLanesKey,
       applicationMax = maxStacks,
       applicationBands = applicationBands,
       applicationSteps = applicationSteps,
@@ -4596,10 +4765,15 @@ function ns.Display.UpdateDurationBar(barNumber, stacks, maxStacks, active, sour
   if needsSetup then
     -- Get texture (use global LSM from top of file) - only when needed
     local texturePath = "Interface\\TargetingFrame\\UI-StatusBar"
+    local textureMissing = false
     if LSM and barConfig.display.texture then
-      local fetchedTexture = LSM:Fetch("statusbar", barConfig.display.texture)
+      -- noDefault: nil = not registered yet (login race) - fall back for
+      -- this call and keep the version unlocked so the next call retries
+      local fetchedTexture = LSM:Fetch("statusbar", barConfig.display.texture, true)
       if fetchedTexture then
         texturePath = fetchedTexture
+      else
+        textureMissing = true
       end
     end
     
@@ -4636,8 +4810,10 @@ function ns.Display.UpdateDurationBar(barNumber, stacks, maxStacks, active, sour
       barFrame.bg:SetShown(barConfig.display.showBackground)
     end
     
-    -- Cache the version — only when options closed so live config changes keep triggering needsSetup
-    if not optionsOpen then
+    -- Cache the version — only when options closed so live config changes keep
+    -- triggering needsSetup, and never while the configured texture is still
+    -- missing (an unlocked version = retry the fetch next call)
+    if not optionsOpen and not textureMissing then
       barFrame._lastConfigVersion = currentConfigVersion
     end
   end
@@ -4951,14 +5127,8 @@ function ns.Display.UpdateDurationBar(barNumber, stacks, maxStacks, active, sour
     -- the pet's visible copy uses the entry's BASE spell ID (1233448 for DT) —
     -- already in the candidate set — while the player-side copy CDM reads is a
     -- hidden nameplate-only mirror containers can never match.
-    local bdUnit = "player"
-    if barConfig.tracking then
-      if barConfig.tracking.trackType == "debuff" then
-        bdUnit = "target"
-      elseif barConfig.tracking.trackType == "petbuff" then
-        bdUnit = "pet"
-      end
-    end
+    local bdLanes, bdLanesKey = ResolveAuraLanes(barConfig.tracking)
+    local bdUnit = bdLanes[1].unit
     local aurasSecret121 = ns.API and ns.API.AurasSecret and ns.API.AurasSecret(bdUnit)
     local bdCooldownID   = barConfig.tracking and barConfig.tracking.cooldownID
     -- Fall back to the bar's own saved spell ID. A CDM bar usually has no
@@ -5142,6 +5312,8 @@ function ns.Display.UpdateDurationBar(barNumber, stacks, maxStacks, active, sour
         end
       end
       ns.BarDuration.Attach(barFrame, durationFrame and durationFrame.text, bdCooldownID, bdTrackedSpell, bdUnit, {
+        lanes = bdLanes,
+        lanesKey = bdLanesKey,
         direction = bdDirection,
         interpolation = barConfig.display.enableSmoothing and Enum.StatusBarInterpolation.ExponentialEaseOut or Enum.StatusBarInterpolation.Immediate,
         showDuration = barConfig.display.showDuration,
@@ -5920,13 +6092,29 @@ function ns.Display.ApplyAppearance(barNumber)
   local cfg = barConfig.display
   local displayType = cfg.displayType or "bar"
 
-  -- Always clear _setupDone on segment bars when ApplyAppearance runs.
-  -- The frame may be resized by UpdateBarForGroup called later in this function,
-  -- but UpdateBar runs immediately after so we can't rely on size-change detection
-  -- (WoW layout may not commit the new size before GetWidth() is called).
+  -- ApplyAppearance IS the "settings changed" edge for the segment world:
+  -- bust EVERY segment-side cache, not just the geometry flag. Most save
+  -- paths (imports, presets, profile loads, setup-tab edits) write the
+  -- config table WITHOUT bumping _configVersion (only the appearance panel
+  -- bumps), so the continuous bar - styled directly below with fresh
+  -- fetches - picked the changes up while segments re-baked from these
+  -- stale caches: the "segmented bars lose customizations outside edit
+  -- mode" report. A nil _lastConfigVersion forces a FULL needsSetup pass
+  -- (fresh texture fetch + color ranges) on the next update.
+  -- (_setupDone also clears because the frame may be resized by
+  -- UpdateBarForGroup later in this function, and WoW layout may not commit
+  -- the new size before GetWidth() is called.)
   if barFrame.granularBars then
     for _, _gb in ipairs(barFrame.granularBars) do _gb._setupDone = false end
   end
+  if barFrame.stackedBars then
+    for _, _sb in ipairs(barFrame.stackedBars) do _sb._setupDone = false end
+  end
+  if barFrame.maxColorBar then barFrame.maxColorBar._setupDone = false end
+  barFrame._cachedTexturePath = nil
+  barFrame._cachedColorRanges = nil
+  barFrame._cachedThresholdBoundary = nil
+  barFrame._lastConfigVersion = nil
   
   
   -- ═══════════════════════════════════════════════════════════════════

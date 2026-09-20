@@ -479,6 +479,11 @@ local function LanesFor(def)
     if #lanes == 0 then return LEGACY_LANES.buff end
     return lanes
 end
+-- Exported for the Aura Group engine rows: routing members by the legacy
+-- unitMode field alone sent current-shape (auraType + units) DEBUFF icons
+-- onto the HELPFUL player row, where a harmful aura can never match — the
+-- one-path rule applies to lane resolution too.
+AuraIcons.LanesFor = LanesFor
 
 local function FilterForLane(def, lane)
     if not lane.harmful then
@@ -489,6 +494,10 @@ local function FilterForLane(def, lane)
     end
     return def.ownOnly and "HARMFUL|PLAYER" or "HARMFUL"
 end
+-- Exported for the Aura Group engine rows (one-path rule, same as LanesFor):
+-- a member's per-slot filter string must resolve exactly like its single-icon
+-- slots, or "Only mine" would mean different things in the two presentations.
+AuraIcons.FilterForLane = FilterForLane
 
 local function IncludeMap(def)
     -- full candidate set when present (CDM imports carry base + override +
@@ -951,7 +960,27 @@ function AuraIcons.StyleActiveButton(btn, settings, sizeRef)
     local floatTexts = forceHide or rs.preserveDurationText == true
 
     btn:SetAlpha(forceHide and 1 or activeAlpha)
-    if btn._arcPlate then btn._arcPlate:SetShown(not forceHide) end
+    -- The plate IGNORES button alpha by design (it is the dimming backing —
+    -- opaque black under translucent art — and the ghost occluder). Its ONLY
+    -- job is standing between a translucent active icon and a VISIBLE ghost,
+    -- so it exists exactly when both sides of that sandwich do:
+    --   * Active Alpha 0  -> no active art: plate off ("hide everything
+    --     while active" — the bare-black-square report), and
+    --   * Missing look hidden (Inactive Alpha 0 / Show Icon off) -> nothing
+    --     to occlude: plate off, so Active Alpha 0.5 is TRUE transparency
+    --     to the world instead of dimmed-over-black (Arc's second report).
+    -- With a visible ghost AND a translucent active icon the plate stays —
+    -- otherwise the two states composite into an unreadable mush. Uses the
+    -- RAW missing alpha (no panel preview bump) so the panel shows the live
+    -- look. Physics note stands: at Active Alpha 0 a visible ghost shows in
+    -- BOTH states (presence is secret; occlusion is the only state logic).
+    if btn._arcPlate then
+        local cs = csv.cooldownState or {}
+        local missAlpha = cs.alpha
+        if missAlpha == nil then missAlpha = sv and sv.cooldownAlpha end
+        if missAlpha == nil then missAlpha = 0.55 end
+        btn._arcPlate:SetShown(not forceHide and activeAlpha > 0 and missAlpha > 0)
+    end
     local zoom = (settings and settings.zoom) or 0.08
     if btn._arcIcon then
         btn._arcIcon:SetShown(not forceHide)
@@ -1221,6 +1250,20 @@ function AuraIcons.StyleActiveButton(btn, settings, sizeRef)
 end
 local StyleActiveButton = AuraIcons.StyleActiveButton
 
+-- MASQUE ON AURA ICONS — PARKED (Arc's call 2026-09-11 after the live-skin
+-- proxy rounds; full design + probe findings in the aura-container-12-1
+-- skill's MASQUE v2 section). Until live-view skinning is finished, aura
+-- icons opt OUT of Masque entirely so no skin fragment (the empty ghost
+-- square, a backdrop over the live art) can ever show. The ApplySettings
+-- block below enforces it: holder permanently suppressed, residue hidden,
+-- and any proxy left over from an earlier build of this session retired.
+-- REVISIT NOTE: the probe showed the proxy design itself was CORRECT once
+-- built (painted skin at the right level above the live button) — the
+-- proxies simply never existed during login-time styling because
+-- ns.Masque.IsEnabled() caches FALSE before the Masque addon loads (ArcUI
+-- loads first alphabetically) and nothing invalidates until a panel open.
+-- Start any revisit with a PLAYER_LOGIN cache invalidation.
+
 function AuraIcons.ApplySettings(arcID, legalBtn)
     local entry = entries[arcID]
     if not (entry and entry.holder) then return end
@@ -1288,6 +1331,35 @@ function AuraIcons.ApplySettings(arcID, legalBtn)
     if holder._arcBorderEdges then
         for _, edgeTex in pairs(holder._arcBorderEdges) do
             if edgeTex.SetAlpha then edgeTex:SetAlpha(0) end
+        end
+    end
+
+    -- MASQUE — PARKED for aura icons (see the block comment above
+    -- ApplySettings): opt out entirely, and leave NOTHING behind. The
+    -- holder stays permanently suppressed (the AddFrame chokepoint honors
+    -- the flag, so no sweep — RefreshMasqueState, ReregisterAll, resize
+    -- reskins — can re-register it), removal residue is hidden
+    -- (RemoveButton repaints the DEFAULT skin on the way out — the
+    -- empty-silver-square report), and a live-skin proxy left over from
+    -- an earlier build of this session is retired the same way.
+    if ns.Masque and ns.Masque.RemoveFrame then
+        if holder._arcMasqueAdded then
+            ns.Masque.RemoveFrame(holder)
+        end
+        holder._arcMasqueGhostSuppressed = true
+        if ns.Masque.HideResidualSkin then
+            ns.Masque.HideResidualSkin(holder)
+        end
+        local p = holder._arcSkinProxy
+        if p then
+            p:Hide()
+            if holder._arcSkinBackHost then holder._arcSkinBackHost:Hide() end
+            if p._arcMasqueAdded then
+                ns.Masque.RemoveFrame(p)
+                if ns.Masque.HideResidualSkin then
+                    ns.Masque.HideResidualSkin(p)
+                end
+            end
         end
     end
 
@@ -1543,6 +1615,21 @@ local function SweepForceHideCombat(inCombat)
             if s and s.forceHideIcon == true then
                 if inCombat then
                     holder.Icon:SetAlpha(0)
+                    -- the panel preview surfaced the SKIN PROXY — take it
+                    -- down with the ghost (holder-side ops are our own
+                    -- frames, legal in combat). Combat end re-runs
+                    -- ApplySettings, which restores it with the preview.
+                    if holder._arcSkinProxy then holder._arcSkinProxy:Hide() end
+                    if holder._arcSkinBackHost then holder._arcSkinBackHost:Hide() end
+                    if holder._arcMasqueAdded and ns.Masque and ns.Masque.RemoveFrame then
+                        ns.Masque.RemoveFrame(holder)
+                    end
+                    holder._arcMasqueGhostSuppressed = true
+                    -- removal repaints the default skin: hide the residue
+                    -- (same rule as the ApplySettings suppression block)
+                    if ns.Masque and ns.Masque.HideResidualSkin then
+                        ns.Masque.HideResidualSkin(holder)
+                    end
                 else
                     AuraIcons.ApplySettings(arcID)
                 end
@@ -1682,6 +1769,19 @@ function AuraIcons.Create(defIn)
         units    = defIn.units,
         ownOnly  = defIn.ownOnly and true or false,
     }
+
+    -- NEW-ICON DEFAULT (Arc's call 2026-09-14): a new aura icon loads only
+    -- on the spec it was created on (every caller is a user-initiated
+    -- create: add form, presets, slash, CDM import). The Load Conditions
+    -- spec toggles widen it; nil/empty still means "all specs", so existing
+    -- icons are untouched. Callers may pass their own showOnSpecs.
+    if defIn.showOnSpecs ~= nil then
+        def.showOnSpecs = defIn.showOnSpecs
+    else
+        local curSpec = GetSpecialization and GetSpecialization()
+        if curSpec then def.showOnSpecs = { curSpec } end
+    end
+
     db.auraIcons[arcID] = def
 
     -- NEW-ICON DEFAULT (Arc's call): the aura-missing ghost starts
@@ -1745,6 +1845,138 @@ function AuraIcons.Delete(arcID)
         if iconSettings and iconSettings[arcID] then iconSettings[arcID] = nil end
     end
     print("|cff00CCFF[Arc Auras]|r Removed aura icon: " .. name)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- TRACKING EDITS (Arc's ask 2026-09-10): the Add popup's fields — type,
+-- units, Own Auras Only, spell ID — editable on a LIVE icon from the
+-- catalog. Validation and the disposition prune live HERE, one path for
+-- any caller.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Display shape for the editor. Current-shape defs pass through; legacy
+-- unitMode defs are DERIVED (nothing rewritten on disk until an edit that
+-- needs the current shape — ownOnly and spellID edits keep a legacy def
+-- legacy, so old icons only convert when type/units actually change).
+local LEGACY_SHAPE = {
+    buff        = { t = "buff",   u = { player = true } },
+    debuff      = { t = "debuff", u = { target = true } },
+    focusdebuff = { t = "debuff", u = { focus = true } },
+    selfdebuff  = { t = "debuff", u = { player = true } },
+    pet         = { t = "buff",   u = { pet = true } },
+    -- legacy both = buff-on-you + debuff-on-target; the closest current
+    -- shape is both x {player, target} (an edit converts to that)
+    both        = { t = "both",   u = { player = true, target = true } },
+}
+
+-- returns: auraType, units, ownOnly, spellID, isMultiID. The units table
+-- is LIVE (the def's own, or a shared legacy template) — copy before
+-- mutating, never write into it.
+function AuraIcons.GetTrackingShape(arcID)
+    local def = AuraIcons.Get(arcID)
+    if not def then return nil end
+    local t, u
+    if type(def.units) == "table" and next(def.units) then
+        t, u = def.auraType or "buff", def.units
+    else
+        local m = LEGACY_SHAPE[def.unitMode or "buff"] or LEGACY_SHAPE.buff
+        t, u = m.t, m.u
+    end
+    local multi = type(def.spellIDs) == "table" and next(def.spellIDs) ~= nil
+    return t, u, def.ownOnly and true or false, def.spellID, multi
+end
+
+-- Every id on the icon never-secret -> identity filters are honored even
+-- on a player-debuff lane (the engine's one exemption; the same rule the
+-- Add popup's safety net uses). Exported so the editor's unit choices
+-- mirror the prune below and the two cannot drift.
+function AuraIcons.DefNeverSecret(arcID)
+    local def = AuraIcons.Get(arcID)
+    if not def then return false end
+    if not (C_Secrets and C_Secrets.GetSpellAuraSecrecy and Enum
+        and Enum.SecrecyLevel) then return false end
+    if type(def.spellIDs) == "table" and next(def.spellIDs) then
+        for id in pairs(def.spellIDs) do
+            if C_Secrets.GetSpellAuraSecrecy(id) ~= Enum.SecrecyLevel.NeverSecret then
+                return false
+            end
+        end
+        return true
+    end
+    return def.spellID ~= nil
+        and C_Secrets.GetSpellAuraSecrecy(def.spellID) == Enum.SecrecyLevel.NeverSecret
+end
+
+-- Apply a tracking edit and rebuild every consumer. changes: ownOnly,
+-- spellID, or auraType + units (type and units travel TOGETHER so the
+-- disposition prune sees the whole picture). Lanes and per-slot filter
+-- strings are CREATE-TIME bindings, so the slots REWIRE (RewireAll parks
+-- the old keys, re-adds with fresh ones, and self-queues under secrecy);
+-- group rows re-derive lanes/filters/exemptions from the def at the
+-- queued sync. Returns ok, err.
+function AuraIcons.UpdateTracking(arcID, changes)
+    local db = GetDB()
+    local def = db and db.auraIcons[arcID]
+    if not (def and type(changes) == "table") then return false, "No such icon" end
+    local curT, curU = AuraIcons.GetTrackingShape(arcID)
+
+    if changes.ownOnly ~= nil then
+        def.ownOnly = changes.ownOnly and true or false
+    end
+
+    if changes.spellID ~= nil then
+        if type(def.spellIDs) == "table" and next(def.spellIDs) then
+            return false, "This icon tracks a fixed list of spells - its IDs cannot be edited"
+        end
+        local id = tonumber(changes.spellID)
+        if not id or id <= 0 then return false, "Invalid spell ID" end
+        local old = def.spellID
+        def.spellID = id
+        -- the Add popup's safety net: a debuff lane on yourself only
+        -- honors the spell-ID filter when the spell is never-secret
+        if curT ~= "buff" and curU.player and not AuraIcons.DefNeverSecret(arcID) then
+            def.spellID = old
+            return false, "Blizzard ignores spell-ID filters for debuffs on you, so this icon would light for ANY debuff"
+        end
+        local info = C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(id)
+        if info then
+            def.name = info.name or def.name
+            def.icon = info.iconID or info.originalIconID or def.icon
+        end
+    end
+
+    if changes.auraType ~= nil or changes.units ~= nil then
+        local t = changes.auraType or curT
+        local src = changes.units or curU
+        -- own copy + the Add popup's disposition prune: non-buff types keep
+        -- hostile-capable units (target/focus), plus yourself only for a
+        -- never-secret spell — an unfilterable combination cannot be built
+        local allowPlayer = (t == "buff") or AuraIcons.DefNeverSecret(arcID)
+        local u = {}
+        for k, v in pairs(src) do
+            if v and (t == "buff" or k == "target" or k == "focus"
+                or (k == "player" and allowPlayer)) then
+                u[k] = true
+            end
+        end
+        if not next(u) then u[(t == "buff") and "player" or "target"] = true end
+        def.auraType, def.units, def.unitMode = t, u, nil
+    end
+
+    -- rebuild every consumer of the def; the ghost art follows a spell-ID
+    -- change through the one-path override resolver (override still wins)
+    local e = entries[arcID]
+    if e and e.holder and e.holder.Icon then
+        local tex = (ArcAuras.GetIconOverride and ArcAuras.GetIconOverride(arcID)) or def.icon
+        if tex then e.holder.Icon:SetTexture(tex) end
+    end
+    if AuraIcons.RewireAll then AuraIcons.RewireAll() end
+    AuraIcons.ApplySettings(arcID)
+    if AuraIcons.RefreshVisibility then AuraIcons.RefreshVisibility() end
+    if ns.AuraIconGroups and ns.AuraIconGroups.QueueSync then
+        ns.AuraIconGroups.QueueSync()
+    end
+    return true
 end
 
 -- Icon override: public entry point kept for existing callers; the
@@ -2290,4 +2522,84 @@ if IS_121 then
             C_Timer.After(1.2, AuraIcons.StackSettle)
         end
     end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- /arcskin — MASQUE STACK PROBE (debug). Prints the real runtime stacking of
+-- every aura icon's skin sandwich so a live report pins WHICH layer eats the
+-- skin: holder/proxy/backdrop levels, Masque registration + painted Normal,
+-- and (accessibility-gated) the engine button's actual strata/level. Button
+-- property reads ride CanBeAccessedInContext — never attempted in combat or
+-- instances, printed as "forbidden" instead.
+-- ═══════════════════════════════════════════════════════════════════════════
+SLASH_ARCSKIN1 = "/arcskin"
+SlashCmdList["ARCSKIN"] = function()
+    print("|cff00CCFF[ArcSkin]|r Masque stack probe (aura icons)")
+    local masqueOn = ns.Masque and ns.Masque.IsEnabled and ns.Masque.IsEnabled()
+    print(("  Masque enabled: %s"):format(tostring(masqueOn)))
+    for arcID, entry in pairs(entries) do
+        local holder = entry.holder
+        if holder then
+            local hs, hl2 = holder:GetFrameStrata(), holder:GetFrameLevel()
+            print(("|cffffd100%s|r holder %s L%d shown=%s %dx%d"):format(
+                arcID, hs, hl2, tostring(holder:IsShown()),
+                math.floor(holder:GetWidth() + 0.5), math.floor(holder:GetHeight() + 0.5)))
+            -- WHO ZOOMED WHAT: configured zoom vs the ghost's actual texcoords
+            local s2 = ArcAuras.GetCachedSettings and ArcAuras.GetCachedSettings(arcID)
+            if holder.Icon and holder.Icon.GetTexCoord then
+                local gx1, _gy1, _gx2b, _gy2b, _gx3, _gy3, gx4 = holder.Icon:GetTexCoord()
+                print(("  cfg zoom=%s aspect=%s | ghost tc=%.3f-%.3f alpha=%.2f desat=%s"):format(
+                    tostring(s2 and s2.zoom), tostring(s2 and s2.aspectRatio),
+                    gx1 or -1, gx4 or -1, holder.Icon:GetAlpha() or -1,
+                    tostring(holder.Icon:IsDesaturated())))
+            end
+            local p = holder._arcSkinProxy
+            if p then
+                local cfgm = p._MSQ_CFG
+                local nrm = cfgm and (cfgm.Normal or cfgm.Normal_Custom)
+                print(("  proxy %s L%d shown=%s %dx%d masque=%s cfg=%s normal=%s ntex=%s nshown=%s nsize=%dx%d"):format(
+                    p:GetFrameStrata(), p:GetFrameLevel(), tostring(p:IsShown()),
+                    math.floor(p:GetWidth() + 0.5), math.floor(p:GetHeight() + 0.5),
+                    tostring(p._arcMasqueAdded), tostring(cfgm ~= nil), tostring(nrm ~= nil),
+                    nrm and tostring(nrm:GetTexture()) or "-",
+                    nrm and tostring(nrm:IsShown()) or "-",
+                    nrm and math.floor((nrm:GetWidth() or 0) + 0.5) or 0,
+                    nrm and math.floor((nrm:GetHeight() or 0) + 0.5) or 0))
+            else
+                print("  proxy: NONE")
+            end
+            local back = holder._arcSkinBackHost
+            if back then
+                print(("  backHost L%d shown=%s tex=%s texShown=%s"):format(
+                    back:GetFrameLevel(), tostring(back:IsShown()),
+                    back.tex and tostring(back.tex:GetTexture()) or "-",
+                    back.tex and tostring(back.tex:IsShown()) or "-"))
+            end
+            for _i, sub in ipairs(entry.subs or {}) do
+                local b = sub.frame
+                if b then
+                    local ok
+                    if b.CanBeAccessedInContext then
+                        ok = b:CanBeAccessedInContext()
+                    else
+                        ok = not (b.IsForbidden and b:IsForbidden())
+                    end
+                    if ok then
+                        local bt1, bt4 = -1, -1
+                        if b._arcIcon and b._arcIcon.GetTexCoord then
+                            local x1, _y1, _x2, _y2, _x3, _y3, x4 = b._arcIcon:GetTexCoord()
+                            bt1, bt4 = x1 or -1, x4 or -1
+                        end
+                        print(("  button[%s] %s L%d shown=%s textOverlay=L%s icon tc=%.3f-%.3f"):format(
+                            sub.key or "?", b:GetFrameStrata(), b:GetFrameLevel(),
+                            tostring(b:IsShown()),
+                            b.TextOverlay and tostring(b.TextOverlay:GetFrameLevel()) or "-",
+                            bt1, bt4))
+                    else
+                        print(("  button[%s] forbidden (in combat/instance)"):format(sub.key or "?"))
+                    end
+                end
+            end
+        end
+    end
 end

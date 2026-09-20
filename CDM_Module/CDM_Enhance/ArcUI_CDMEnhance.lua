@@ -1256,6 +1256,13 @@ local function GetEffectiveIconSettings(cooldownID)
   -- Masque controls icon borders/textures, so ArcUI shouldn't apply zoom/padding/aspectRatio
   -- Check requires: ns.Masque exists, IsEnabled function exists, AND IsEnabled() returns true
   local masqueEnabled = ns.Masque and ns.Masque.IsEnabled and (ns.Masque.IsEnabled() == true)
+  -- AURA ICONS: Masque support is parked (2026-09-11) — they are never
+  -- skinned, so the cascade must never flatten their zoom/aspect/padding
+  -- for Masque either (this flattening was why aura ghosts lost their
+  -- zoom whenever the Masque toggle was on — the cfg zoom=0 probe find)
+  if masqueEnabled and type(cooldownID) == "string" and cooldownID:match("^arc_aura_") then
+    masqueEnabled = false
+  end
   if masqueEnabled then
     effective.aspectRatio = 1.0
     effective.zoom = 0
@@ -1360,6 +1367,15 @@ local function ResolveIconTexture(frame)
   if not cdID then return nil end
   local cfg = GetEffectiveIconSettings(cdID)
   if not cfg then return nil end
+
+  -- 0. TRANSPARENT art: Show Icon off, or Custom Icon 0 (the restored
+  --    "id 0" trick from the Discord transparent-icons request). 0 is a
+  --    first-class texture value here: SetTexture(0) renders NO art while
+  --    swipe, border, texts and GLOWS keep working - users stack proc
+  --    trackers on an invisible icon. The hook enforces it live like any
+  --    override. The old Show Icon path (whole-frame alpha 0 + text
+  --    floats) is retired at the _arcForceHideActive writer.
+  if cfg.forceHideIcon == true or cfg.customIconID == 0 then return 0 end
 
   -- 1. Custom Icon Override (spell ID or texture file ID)
   local customID = cfg.customIconID
@@ -2796,12 +2812,16 @@ ApplyIconStyle = function(frame, cdID)
   -- for any SetAlpha during the rest of ApplyIconStyle; the hide + text float
   -- happen after the text overlays are built (post SetupCooldownText below).
   local wasForceHidden = frame._arcForceHideActive == true
-  -- Arc AURA icons opt out of the whole-frame hide: their duration/stack
-  -- texts live on the ENGINE BUTTON (a separate frame tree), so alpha-0 on
-  -- the holder would erase the very texts the option promises to keep.
-  -- AuraIcons.ApplySettings/StyleActiveButton own force-hide there (ghost
-  -- art + button art hide, texts survive).
-  frame._arcForceHideActive = (cfg.forceHideIcon == true) and not frame._arcIsAuraIcon
+  -- Show Icon now hides ONLY the icon ART, through the texture resolver
+  -- (ResolveIconTexture returns 0 -> SetTexture(0) = no art) - swipe,
+  -- border, texts and glows keep working, same as Custom Icon 0 (Arc's
+  -- call, from the Discord transparent-icons request). The whole-frame
+  -- alpha-0 machinery is RETIRED: _arcForceHideActive stays false forever
+  -- (its readers - the alpha hook, CooldownState skip, text floats - go
+  -- inert), while wasForceHidden still feeds the one-shot un-hide
+  -- transition below so users coming from the old build get their frame
+  -- alpha and floated texts restored on the first style pass.
+  frame._arcForceHideActive = false
   frame._arcWasForceHidden = wasForceHidden
 
   -- NOTE: CDMGroups controls all sizing - CDMEnhance does NOT call SetScale or SetSize
@@ -2822,7 +2842,12 @@ ApplyIconStyle = function(frame, cdID)
   
   -- MASQUE COMPATIBILITY: Check if Masque skinning is enabled for this viewer type
   local masqueActive = ns.Masque and ns.Masque.ShouldMasqueControlIcon and ns.Masque.ShouldMasqueControlIcon(vType)
-  
+
+  -- AURA ICONS: Masque support is parked (2026-09-11) — they are never
+  -- registered, so ArcUI must NEVER yield their zoom/aspect/padding to
+  -- Masque either, or the ghost renders unzoomed whenever Masque is on.
+  if frame._arcIsAuraIcon then masqueActive = false end
+
   if masqueActive then
     -- Masque controls icon appearance - use defaults (no zoom/padding from ArcUI)
     aspectRatio = 1.0
@@ -4257,16 +4282,15 @@ ApplyIconStyle = function(frame, cdID)
           -- This hook handles: texture override, bling, reverse, swipe color.
           -- ═══════════════════════════════════════════════════════════════════
 
-          -- Set texture to spell icon (not aura icon)
-          local cooldownInfo = parentFrame.cooldownInfo
-          local spellID = cooldownInfo and (cooldownInfo.overrideSpellID or cooldownInfo.spellID)
-          if spellID and parentFrame.Icon then
-            local texture = C_Spell.GetSpellTexture(spellID)
-            if texture then
-              parentFrame._arcBypassTextureHook = true
-              parentFrame.Icon:SetTexture(texture)
-              parentFrame._arcBypassTextureHook = false
-            end
+          -- Set texture through THE resolver (one-path law, icon-override-system
+          -- skill): a custom icon wins outright; else IAO forces the spell art
+          -- back while the aura is active. The old DIRECT spell-art push here
+          -- bypassed the texture hook and stomped custom icons on every
+          -- in-combat cooldown push -- the "custom icon switches when I enter
+          -- combat" report (2026-08-31). When neither applies, no write: CDM's
+          -- own art already stands.
+          if parentFrame.Icon then
+            ApplyIconTexture(parentFrame, false)
           end
           
           -- Apply bling/reverse/color based on who controls cooldowns
@@ -7282,7 +7306,46 @@ EnhanceFrame = function(frame, cdID, viewerType, viewerName)
   -- Track which cdID this frame is currently enhanced for
   frame._arcLastEnhancedCdID = cdID
   frame._arcEnhanced = true
-  
+
+  -- SHADOW IDENTITY CATCH-ALL (2026-08-29): the shadow Cooldowns must always
+  -- hold state for the spell the frame CURRENTLY shows. Rebinds can slip past
+  -- the FrameController dispatch (frames momentarily unmanaged mid-storm), and
+  -- the OnCooldownEvent override detection only runs on cooldown EVENTS — which
+  -- an idle player never sends, so a stale shadow survived until the user cast
+  -- something. Enhance runs on every settled wave with fresh cooldownInfo:
+  -- a fed-spell / current-spell mismatch here re-feeds immediately. Identity
+  -- compare, so it also catches A→B→A round trips that defeat any
+  -- endpoint-compared stamp. Secret-guarded: item/trinket entries can expose
+  -- a SECRET spellID (12.1, instance-based) — never compare those.
+  if (viewerType == "cooldown" or viewerType == "utility")
+     and ns.CooldownState and ns.CooldownState.FeedShadow then
+    local fedSpell = frame._arcShadowFedSpellID
+    local ci = frame.cooldownInfo
+    local curSpell = ci and (ci.overrideSpellID or ci.spellID)
+    -- A NIL fed marker is ALSO a violation: the shadow is UNFED (fresh pool
+    -- frame, or a released frame whose marker the release dispatch nil'd while
+    -- the rebind landed un-adopted and skipped the container gate) — Apply
+    -- renders an unfed shadow as READY, which put a saturated face on an
+    -- on-cooldown Bloodlust (trace-proven 2026-08-29). Feed on nil too; the
+    -- feed stamps the marker so settled frames skip this on every later pass.
+    if curSpell and not issecretvalue(curSpell)
+       and (not fedSpell or issecretvalue(fedSpell) or fedSpell ~= curSpell) then
+      frame._arcLastShadowShown  = nil
+      frame._arcLastChargeShown  = nil
+      frame._arcShadowFedSpellID = nil
+      frame._arcCDAlertState     = nil  -- sound-alert baseline: new spell, no transition
+      local csCfg = GetEffectiveIconSettingsForFrame(frame)
+      if csCfg then
+        if ns.TraceTap then
+          ns.TraceTap("CS", string.format("ENHANCE-REFEED cd=%s fed=%s now=%s",
+            tostring(cdID), tostring(fedSpell), tostring(curSpell)))
+        end
+        ns.CooldownState.FeedShadow(frame, csCfg)
+        ApplyCooldownStateVisuals(frame, csCfg)
+      end
+    end
+  end
+
   -- Update tracking table
   enhancedFrames[cdID] = {
     frame = frame,
@@ -10263,7 +10326,12 @@ StartLCGProcGlow = function(frame, glowCfg, padding)
     yOffset = glowOffset + (glowCfg.yOffset or 0),
     translateX = glowCfg.translateX or 0,
     translateY = glowCfg.translateY or 0,
-    frameLevel = glowCfg.frameLevel,
+    -- strata/frameLevel defaulting mirrors ShowProcGlowPreview EXACTLY (this
+    -- function's stated contract) -- the live path had drifted and silently
+    -- DROPPED the user's Glow Strata (panel key procGlow.strata; the
+    -- glow-wiring pass caught a user running DIALOG that did nothing)
+    strata = (not glowCfg.strata or glowCfg.strata == "inherit") and "MEDIUM" or glowCfg.strata,
+    frameLevel = glowCfg.frameLevel or ((not glowCfg.strata or glowCfg.strata == "inherit") and 1 or nil),
   })
 end
 

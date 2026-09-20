@@ -350,12 +350,20 @@ function ArcAuras.MakeTrinketID(slotID)
     return ID_PREFIX.TRINKET .. tostring(slotID)
 end
 
-function ArcAuras.MakeItemID(itemID)
-    return ID_PREFIX.ITEM .. tostring(itemID)
+-- COPIES (2026-08-30): copy 1 keeps the bare id (backward compatible, no
+-- migration); copies 2+ append "#<n>" -- '#' can never appear in a numeric
+-- id, and every prefix match ("^arc_spell_") still hits. ParseArcID reads
+-- the leading digits only, so suffixed ids resolve to the same spell/item.
+function ArcAuras.MakeItemID(itemID, copy)
+    local id = ID_PREFIX.ITEM .. tostring(itemID)
+    if copy and copy > 1 then id = id .. "#" .. copy end
+    return id
 end
 
-function ArcAuras.MakeSpellID(spellID)
-    return ID_PREFIX.SPELL .. tostring(spellID)
+function ArcAuras.MakeSpellID(spellID, copy)
+    local id = ID_PREFIX.SPELL .. tostring(spellID)
+    if copy and copy > 1 then id = id .. "#" .. copy end
+    return id
 end
 
 function ArcAuras.ParseArcID(arcID)
@@ -365,11 +373,14 @@ function ArcAuras.ParseArcID(arcID)
         local slotID = tonumber(arcID:sub(#ID_PREFIX.TRINKET + 1))
         return "trinket", slotID
     elseif arcID:find("^" .. ID_PREFIX.ITEM) then
-        local itemID = tonumber(arcID:sub(#ID_PREFIX.ITEM + 1))
-        return "item", itemID
+        -- Item/spell IDs can carry a "#N" copy suffix. Leading digits = the id.
+        local tail = arcID:sub(#ID_PREFIX.ITEM + 1)
+        local itemID = tonumber(tail:match("^(%d+)"))
+        return "item", itemID, tonumber(tail:match("#(%d+)$")) or 1
     elseif arcID:find("^" .. ID_PREFIX.SPELL) then
-        local spellID = tonumber(arcID:sub(#ID_PREFIX.SPELL + 1))
-        return "spell", spellID
+        local tail = arcID:sub(#ID_PREFIX.SPELL + 1)
+        local spellID = tonumber(tail:match("^(%d+)"))
+        return "spell", spellID, tonumber(tail:match("#(%d+)$")) or 1
     elseif arcID:find("^" .. ID_PREFIX.TIMER) then
         -- Timer IDs can have a "_N" dedup suffix. Extract the leading digits only.
         local tail = arcID:sub(#ID_PREFIX.TIMER + 1)
@@ -402,11 +413,11 @@ local function GetItemNameAndIcon(itemID)
     if not itemID then return nil, nil end
     
     -- First try GetItemInfo (returns full data if cached)
-    local name, _, _, _, _, _, _, _, _, icon = GetItemInfo(itemID)
+    local name, _, _, _, _, _, _, _, _, icon = C_Item.GetItemInfo(itemID)
     
     -- If not cached, use GetItemInfoInstant for basic info (always available from local DB)
     if not name or not icon then
-        local itemName, _, _, _, itemIcon = GetItemInfoInstant(itemID)
+        local itemName, _, _, _, itemIcon = C_Item.GetItemInfoInstant(itemID)
         name = name or itemName
         icon = icon or itemIcon
     end
@@ -423,13 +434,13 @@ end
 
 local function GetItemOnUseSpell(itemID)
     if not itemID then return nil, nil end
-    local spellName, spellID = GetItemSpell(itemID)
+    local spellName, spellID = C_Item.GetItemSpell(itemID)
     return spellName, spellID
 end
 
 local function IsItemOnUse(itemID)
     if not itemID then return false end
-    local spellName = GetItemSpell(itemID)
+    local spellName = C_Item.GetItemSpell(itemID)
     -- Secret-safe: use truthiness check, not ~= nil comparison
     -- In WoW 12.0, GetItemSpell may return a secret for the spell name
     if spellName then return true end
@@ -439,7 +450,7 @@ end
 -- Check if an item is passive (no on-use spell)
 local function IsItemPassive(itemID)
     if not itemID then return true end  -- No item = treat as passive
-    local spellName = GetItemSpell(itemID)
+    local spellName = C_Item.GetItemSpell(itemID)
     -- Secret-safe: a secret value is truthy even if "empty"
     -- For passive items, GetItemSpell returns nil (non-secret)
     if spellName then return false end
@@ -490,7 +501,7 @@ local function ShouldShowInventoryCount(itemID)
     if not itemID then return false end
     
     -- GetItemInfo returns classID as 12th value, subclassID as 13th
-    local _, _, _, _, _, _, _, _, _, _, _, classID, subclassID = GetItemInfo(itemID)
+    local _, _, _, _, _, _, _, _, _, _, _, classID, subclassID = C_Item.GetItemInfo(itemID)
     if not classID then return false end  -- Item info not loaded yet
     
     -- Consumables (potions, food, flasks, etc.) - always show count
@@ -568,7 +579,7 @@ local function ComputeStackDisplay(config)
     
     if config.type == "item" and config.itemID then
         -- First check if item has spell charges via C_Spell API
-        local spellName, spellID = GetItemSpell(config.itemID)
+        local spellName, spellID = C_Item.GetItemSpell(config.itemID)
         if spellID then
             local chargeInfo = C_Spell.GetSpellCharges(spellID)
             -- currentCharges is SECRET in 12.0 — comparing to nil returns false for secret numbers.
@@ -581,8 +592,8 @@ local function ComputeStackDisplay(config)
         
         -- Check for item-based charges (like Healthstone) via GetItemCount includeCharges=true
         -- This is what CooldownPanels uses — no tooltip parsing needed
-        local withCharges = GetItemCount(config.itemID, false, true)
-        local withoutCharges = GetItemCount(config.itemID, false, false)
+        local withCharges = C_Item.GetItemCount(config.itemID, false, true)
+        local withoutCharges = C_Item.GetItemCount(config.itemID, false, false)
         if withCharges and withoutCharges and withCharges > withoutCharges then
             return withCharges, true
         end
@@ -596,7 +607,7 @@ local function ComputeStackDisplay(config)
         -- Trinkets: check for spell charges
         local itemID = GetInventoryItemID("player", config.slotID)
         if itemID then
-            local spellName, spellID = GetItemSpell(itemID)
+            local spellName, spellID = C_Item.GetItemSpell(itemID)
             if spellID then
                 local chargeInfo = C_Spell.GetSpellCharges(spellID)
                 -- currentCharges is SECRET in 12.0 — if chargeInfo table exists, charge system confirmed
@@ -1028,6 +1039,12 @@ local function CreateArcAuraFrame(arcID, config)
     frame:SetMovable(true)
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
+    -- WIRE-ONCE LAW: construction runs on frame REUSE too (orphaned named
+    -- frames fall through into this block), and the SetScripts below REPLACE
+    -- any CDMGroups free-drag handlers the old frame carried - clear the free
+    -- path's wire-once flag so SetupFreeIconDrag re-wires instead of trusting
+    -- a stale "already wired".
+    frame._cdmgFreeDragScriptsWired = nil
     frame:SetScript("OnDragStart", function(self)
         if self._isDraggable then
             self:StartMoving()
@@ -1099,6 +1116,29 @@ local function CreateArcAuraFrame(arcID, config)
     frame:SetScript("OnLeave", function()
         GameTooltip:Hide()
     end)
+
+    -- Inherit the CURRENT tooltip / click-through state at birth. Icons
+    -- created mid-session (spec-swap rebuilds, fresh creates from the
+    -- panel or presets) showed tooltips and swallowed clicks until an
+    -- options round-trip, because only layout/settings passes applied the
+    -- state (Discord report 2026-09-04). Mirrors the free-icon setup path:
+    -- tooltips FIRST, click-through LAST (SetScript("OnEnter") above
+    -- implicitly re-enabled mouse).
+    if ns.CDMGroups and ns.CDMGroups.ApplyTooltipSettings then
+        local clickThrough = false
+        local Shared = ns.CDMShared
+        local gdb = Shared and Shared.GetCDMGroupsDB and Shared.GetCDMGroupsDB()
+        if gdb then clickThrough = gdb.clickThrough == true end
+        local ACD = LibStub("AceConfigDialog-3.0", true)
+        local panelOpen = ACD and ACD.OpenFrames and ACD.OpenFrames["ArcUI"] and true or false
+        if panelOpen or ns.CDMGroups.dragModeEnabled then clickThrough = false end
+        local disableTips = ns.CDMGroups.ShouldDisableTooltips
+            and ns.CDMGroups.ShouldDisableTooltips() or false
+        ns.CDMGroups.ApplyTooltipSettings(frame, clickThrough or disableTips)
+        if ns.CDMGroups.ApplyClickThrough then
+            ns.CDMGroups.ApplyClickThrough(frame, clickThrough)
+        end
+    end
 
     -- Right-click context menu REMOVED (3.8.0.a, by request): everything it
     -- offered (configure, always-show, change icon, remove) lives in the Arc
@@ -1316,11 +1356,9 @@ function ArcAuras.DestroyFrame(arcID)
             end
         end
         
-        -- Clear reverse lookup
-        if fd and fd.spellID and ns.ArcAurasCooldown.spellsByID then
-            if ns.ArcAurasCooldown.spellsByID[fd.spellID] == arcID then
-                ns.ArcAurasCooldown.spellsByID[fd.spellID] = nil
-            end
+        -- Clear reverse lookup (multi-map: one spellID can drive several copies)
+        if fd and fd.spellID and ns.ArcAurasCooldown.UnindexSpellArcID then
+            ns.ArcAurasCooldown.UnindexSpellArcID(fd.spellID, arcID)
         end
         
         -- Clear spell state tables
@@ -1414,6 +1452,14 @@ function ArcAuras.DestroyFrame(arcID)
         frame:SetScript("OnDragStart", nil)
         frame:SetScript("OnDragStop", nil)
         frame:SetScript("OnUpdate", nil)
+        -- WIRE-ONCE LAW (2026-09-04): the free-drag scripts are installed
+        -- once behind _cdmgFreeDragScriptsWired — clearing the scripts
+        -- WITHOUT the flag leaves a REUSED named frame (CreateArcAuraFrame
+        -- reuses orphans; totems destroy/recreate on every spec change)
+        -- claiming "already wired" with no drag scripts installed = a
+        -- permanently undraggable free icon (the 2026-09-14 totem slots
+        -- report). This was the missing FIFTH script-clearing site.
+        frame._cdmgFreeDragScriptsWired = nil
     end
     
     -- ═══════════════════════════════════════════════════════════════════════════
@@ -1672,8 +1718,25 @@ function ArcAuras.SetIconOverride(arcID, overrideID)
 
     local n = tonumber(overrideID)
 
+    -- 0 = TRANSPARENT ART (the restored "id 0" trick): stored as a real
+    -- override; every painter does SetTexture(0) = no art while swipe,
+    -- texts and glows keep working. Aura icons are the one exception -
+    -- their active-button art is painted by the 12.1 engine UNDER our
+    -- override layer, so 0 cannot erase it; Show Icon covers them.
+    if n == 0 then
+        if isAura then
+            print("|cff00CCFF[Arc Auras]|r Aura icons cannot use the transparent-icon trick (0) - use the Show Icon toggle instead.")
+            return false
+        end
+        config.iconOverride, config.iconOverrideID = 0, 0
+        if isTimer then config.icon, config.iconID = 0, 0 end
+        ArcAuras.RepaintIcon(arcID)
+        print("|cff00CCFF[Arc Auras]|r Icon set to transparent for " .. (config.name or arcID))
+        return true
+    end
+
     -- CLEAR ---------------------------------------------------------------
-    if not n or n <= 0 then
+    if not n or n < 0 then
         config.iconOverride, config.iconOverrideID = nil, nil
         if isTimer then config.icon, config.iconID = nil, nil end
         -- keep the stored source art current: catalog rows read
@@ -1786,7 +1849,7 @@ local function GetItemUseSpellID(itemID)
     if not itemID then return nil end
     local cached = itemUseSpellCache[itemID]
     if cached ~= nil then return cached or nil end
-    local _, spellID = GetItemSpell(itemID)
+    local _, spellID = C_Item.GetItemSpell(itemID)
     spellID = tonumber(spellID)
     itemUseSpellCache[itemID] = spellID or false
     return spellID
@@ -2163,12 +2226,25 @@ local function ApplyCooldownStateVisuals(frame, arcID, isOnCooldown)
                 if not frame._arcReadyGlowActive then
                     frame._arcReadyGlowActive = true
                     if ns.Glows then
+                        -- glow-wiring pass 2026-08-29: this sweep path passed
+                        -- only 4 of the panel's knobs -- scale/intensity/
+                        -- particles/offsets/strata/level silently ignored on
+                        -- glows started HERE while the main path honored them
                         ns.Glows.Start(frame, "ArcUI_ReadyGlow",
                             sv.readyGlowType or "button", {
                                 color = sv.readyGlowColor or {1,1,1,1},
+                                intensity = sv.readyGlowIntensity or 1.0,
+                                scale = sv.readyGlowScale or 1.0,
                                 lines = sv.readyGlowLines or 8,
                                 frequency = sv.readyGlowSpeed or 0.25,
                                 thickness = sv.readyGlowThickness or 2,
+                                particles = sv.readyGlowParticles or 4,
+                                xOffset = sv.readyGlowXOffset or 0,
+                                yOffset = sv.readyGlowYOffset or 0,
+                                translateX = sv.readyGlowTranslateX or 0,
+                                translateY = sv.readyGlowTranslateY or 0,
+                                strata = sv.readyGlowFrameStrata,
+                                frameLevel = sv.readyGlowFrameLevel,
                             })
                     end
                 end
@@ -2229,6 +2305,39 @@ local function ApplyUsabilityVisuals(frame, arcID, isUsable)
     end
 end
 
+-- COOLDOWN SOUND ALERTS (items/trinkets, 2026-08-30): 2-state transition on
+-- the engine's authoritative _isOnCooldown (GCD-filtered at
+-- ResolveItemCooldown). Items have no charge concept: Ready and On Cooldown
+-- only. Called from UpdateArcItemFrame AND the BAG_UPDATE_COOLDOWN fast path
+-- (cooldown START skips the full update). Baseline-dedup makes double calls
+-- harmless. Playback via ns.CDMAuraAlerts.QueueCooldownAlert (0.15s verify).
+local function EvaluateItemCooldownAlerts(frame, arcID, isOnCooldown)
+    local newS = isOnCooldown and "empty" or "full"
+    local prevS = frame._arcCDAlertState
+    frame._arcCDAlertState = newS
+    if not prevS or prevS == newS then return end
+    local settings = ArcAuras.GetCachedSettings(arcID)
+    local ca = settings and settings.cooldownAlerts
+    local CAA = ns.CDMAuraAlerts
+    if not (ca and CAA and CAA.QueueCooldownAlert) then return end
+    if ns.TraceTap then
+        ns.TraceTap("CDA", string.format("item transition %s->%s id=%s",
+            tostring(prevS), tostring(newS), tostring(arcID)))
+    end
+    local key = "arc|" .. tostring(arcID)
+    if newS == "full" then
+        local s, x = CAA.ResolveAlertPair(ca, "ready")
+        CAA.QueueCooldownAlert(key .. "#ready", s, x, ca.channel, function()
+            return frame._isOnCooldown ~= true
+        end)
+    else
+        local s, x = CAA.ResolveAlertPair(ca, "cooldown")
+        CAA.QueueCooldownAlert(key .. "#oncd", s, x, ca.channel, function()
+            return frame._isOnCooldown == true
+        end)
+    end
+end
+
 local function UpdateArcItemFrame(frame, arcID)
     if not (frame and frame:IsShown()) then return end
     if frame._arcIsSpellCooldown then return end
@@ -2260,7 +2369,9 @@ local function UpdateArcItemFrame(frame, arcID)
                 
                 -- Step 3: Get visual settings from CACHE (not fresh every tick!)
                 local settings = ArcAuras.GetCachedSettings(arcID)
-                
+
+                EvaluateItemCooldownAlerts(frame, arcID, isOnCooldown)
+
                 -- Get properly formatted state visuals from CDMEnhance if available
                 -- OPTIMIZED: Refresh stateVisuals on state change OR when settings invalidated
                 local stateVisuals = frame._cachedStateVisuals
@@ -2428,7 +2539,7 @@ local function UpdateArcItemFrame(frame, arcID)
                     local isUnusableDim = false   -- controls alpha dimming
                     local isUnusableDesat = false -- controls desaturation
                     if config.type == "item" and config.itemID then
-                        local count = GetItemCount(config.itemID, false, false)
+                        local count = C_Item.GetItemCount(config.itemID, false, false)
                         local dimWhenEmpty = settings and settings.cooldownStateVisuals
                             and settings.cooldownStateVisuals.cooldownState
                             and settings.cooldownStateVisuals.cooldownState.dimWhenEmpty
@@ -2550,7 +2661,7 @@ local function UpdateArcItemFrame(frame, arcID)
                     
                     -- Suppress glow for consumed items (count = 0) — can't use what you don't have
                     if shouldShowGlow and not isGlowPreview and config.type == "item" and config.itemID then
-                        local count = GetItemCount(config.itemID, false, false)
+                        local count = C_Item.GetItemCount(config.itemID, false, false)
                         if count == 0 then
                             shouldShowGlow = false
                         end
@@ -2615,6 +2726,8 @@ local function UpdateArcItemFrame(frame, arcID)
                                 particles = glowSettings.readyGlowParticles or 4,
                                 xOffset = glowSettings.readyGlowXOffset or 0,
                                 yOffset = glowSettings.readyGlowYOffset or 0,
+                                translateX = glowSettings.readyGlowTranslateX or 0,
+                                translateY = glowSettings.readyGlowTranslateY or 0,
                                 strata = glowSettings.readyGlowFrameStrata,
                                 frameLevel = glowSettings.readyGlowFrameLevel,
                             })
@@ -2868,6 +2981,9 @@ function ArcAuras.ApplySettingsToFrame(arcID, frame)
     -- Check if Masque is globally enabled - skip ArcUI visuals even if frame not yet registered
     -- This prevents visual conflicts during zone load when frames are updated before Masque registration
     local masqueActive = ns.Masque and ns.Masque.IsEnabled and ns.Masque.IsEnabled()
+    -- AURA ICONS: Masque support is parked (2026-09-11) — never registered,
+    -- so ArcUI never yields their visuals to Masque either
+    if frame._arcIsAuraIcon then masqueActive = false end
     
     -- ═══════════════════════════════════════════════════════════════════════════
     -- MASQUE RE-SKIN: When Masque is active, it calculates Icon insets based on
@@ -3219,7 +3335,7 @@ end
 -- ═══════════════════════════════════════════════════════════════════════════
 
 StaticPopupDialogs["ARCAURAS_ICON_OVERRIDE"] = {
-    text = "Enter a Spell ID or Item ID for the new icon:\n(Enter 0 or leave blank to reset to default)",
+    text = "Enter a Spell ID or Item ID for the new icon:\n(0 = transparent icon. Leave blank to reset to default)",
     button1 = "Apply", button2 = "Cancel",
     hasEditBox = true,
     OnShow = function(self)
@@ -3339,8 +3455,29 @@ function ArcAuras.AddTrackedItem(config)
     
     -- Check if already tracked
     if db.trackedItems[arcID] then
-        -- Already exists - just return true without creating duplicate
-        return true
+        -- ITEM COPIES (2026-08-30): only an EXPLICIT user add (config.allowCopy,
+        -- set by the options Add popup) creates another icon of the same item.
+        -- Every automatic caller (auto-track slots, equip sweeps, imports)
+        -- keeps the dedupe -- they re-run constantly and must never mint copies.
+        if config.type == "item" and config.allowCopy then
+            local MAX_COPIES = 5
+            local found
+            for n = 2, MAX_COPIES do
+                local candidate = ArcAuras.MakeItemID(config.itemID, n)
+                if not db.trackedItems[candidate] then
+                    found = candidate
+                    break
+                end
+            end
+            if not found then
+                print("|cff00CCFF[Arc Auras]|r Copy limit reached for this item (" .. MAX_COPIES .. " icons).")
+                return false
+            end
+            arcID = found
+        else
+            -- Already exists - just return true without creating duplicate
+            return true
+        end
     end
     
     -- Detect if item is passive (no on-use spell)
@@ -3356,6 +3493,17 @@ function ArcAuras.AddTrackedItem(config)
         isAutoTrackSlot = config.isAutoTrackSlot or false,
         hideWhenUnequipped = config.hideWhenUnequipped or false,
     }
+
+    -- NEW-ICON DEFAULT (Arc's call 2026-09-14): an EXPLICIT user add loads
+    -- only on the spec it was created on (allowCopy = options Add popup,
+    -- isUserAdd = drag-drop widget). Automatic callers (auto-track trinket
+    -- slots, equip scans) set neither and keep the all-specs default -
+    -- gear icons re-added by sweeps must not be pinned to whatever spec
+    -- the sweep happened to run on.
+    if config.allowCopy or config.isUserAdd then
+        local curSpec = GetSpecialization and GetSpecialization()
+        if curSpec then entry.showOnSpecs = { curSpec } end
+    end
     
     -- Save to database
     db.trackedItems[arcID] = entry
@@ -3375,7 +3523,7 @@ function ArcAuras.AddTrackedItem(config)
         if config.type == "item" and config.hideWhenUnequipped and config.itemID then
             if not ArcAuras.IsItemEquipped(config.itemID) then
                 -- Don't create frame — UpdateItemFrameVisibility will create when equipped
-                return true
+                return true, arcID
             end
         end
         
@@ -3388,7 +3536,7 @@ function ArcAuras.AddTrackedItem(config)
             -- For items with on-use spells, schedule a delayed stack refresh
             -- This handles the case where tooltip data isn't ready immediately
             if config.type == "item" and config.itemID then
-                local spellName, spellID = GetItemSpell(config.itemID)
+                local spellName, spellID = C_Item.GetItemSpell(config.itemID)
                 if spellID then
                     C_Timer.After(0.5, function()
                         if ArcAuras.frames[arcID] then
@@ -3400,7 +3548,7 @@ function ArcAuras.AddTrackedItem(config)
         end
     end
     
-    return true
+    return true, arcID
 end
 
 function ArcAuras.RemoveTrackedItem(arcID)
@@ -5101,36 +5249,49 @@ function ArcAuras.RefreshMasqueState()
     local masqueEnabled = ns.Masque and ns.Masque.IsEnabled and ns.Masque.IsEnabled()
     
     for arcID, frame in pairs(ArcAuras.frames) do
-        if masqueEnabled then
-            -- Masque is now enabled - register via unified system if not already
-            if not frame._arcMasqueAdded then
-                if ns.Masque and ns.Masque.AddFrame then
-                    ns.Masque.AddFrame(frame, "ArcAuras", arcID)
-                    frame._arcMasqueSkinW = frame:GetWidth()
-                    frame._arcMasqueSkinH = frame:GetHeight()
-                end
-            end
-            -- Reset icon texture to default 1:1 for Masque to control
-            if frame.Icon and frame.Icon.SetTexCoord then
-                frame.Icon:SetTexCoord(0, 1, 0, 1)
+        -- AURA ICONS: never Masque-registered (parked - ArcUI keeps full
+        -- visual control, ghost included; the AddFrame chokepoint refuses
+        -- them too) and their texcoords are NEVER reset here - the ghost's
+        -- zoom belongs to AuraIcons.ApplySettings, which also runs any
+        -- leftover-registration cleanup.
+        local isAuraIcon = frame._arcIsAuraIcon
+            or (type(arcID) == "string" and arcID:match("^arc_aura_") ~= nil)
+        if isAuraIcon then
+            if ns.AuraIcons and ns.AuraIcons.ApplySettings then
+                ns.AuraIcons.ApplySettings(arcID)
             end
         else
-            -- Masque is now disabled - unregister via unified system
-            if frame._arcMasqueAdded then
-                if ns.Masque and ns.Masque.RemoveFrame then
-                    ns.Masque.RemoveFrame(frame)
+            if masqueEnabled then
+                -- Masque is now enabled - register via unified system if not already
+                if not frame._arcMasqueAdded then
+                    if ns.Masque and ns.Masque.AddFrame then
+                        ns.Masque.AddFrame(frame, "ArcAuras", arcID)
+                        frame._arcMasqueSkinW = frame:GetWidth()
+                        frame._arcMasqueSkinH = frame:GetHeight()
+                    end
                 end
-                frame._arcMasqueSkinW = nil
-                frame._arcMasqueSkinH = nil
-                -- Reset icon texture to default
+                -- Reset icon texture to default 1:1 for Masque to control
                 if frame.Icon and frame.Icon.SetTexCoord then
                     frame.Icon:SetTexCoord(0, 1, 0, 1)
                 end
+            else
+                -- Masque is now disabled - unregister via unified system
+                if frame._arcMasqueAdded then
+                    if ns.Masque and ns.Masque.RemoveFrame then
+                        ns.Masque.RemoveFrame(frame)
+                    end
+                    frame._arcMasqueSkinW = nil
+                    frame._arcMasqueSkinH = nil
+                    -- Reset icon texture to default
+                    if frame.Icon and frame.Icon.SetTexCoord then
+                        frame.Icon:SetTexCoord(0, 1, 0, 1)
+                    end
+                end
             end
+
+            -- Refresh settings regardless
+            ArcAuras.RefreshFrameSettings(arcID)
         end
-        
-        -- Refresh settings regardless
-        ArcAuras.RefreshFrameSettings(arcID)
     end
 end
 
@@ -5461,6 +5622,7 @@ local _arcAurasOnEvent = function(self, event, arg1)
                                 frame._lastDuration = duration
                                 local prevOnCooldown = frame._isOnCooldown
                                 frame._isOnCooldown = isOnCooldown
+                                EvaluateItemCooldownAlerts(frame, arcID, isOnCooldown)
                                 if isOnCooldown and not prevOnCooldown then
                                     -- Cooldown STARTED: apply cooldown visuals immediately
                                     ApplyCooldownStateVisuals(frame, arcID, true)
@@ -5526,6 +5688,13 @@ local _arcAurasOnEvent = function(self, event, arg1)
             -- We must run AFTER ForceRepositionAllFrames completes (at ~2.5s)
             C_Timer.After(3.0, function()
                 ArcAuras._specChangeRefreshPending = false
+                -- the per-spec layout cache (click-through / tooltips) must
+                -- be current BEFORE frames register: SetupFreeIconDrag and
+                -- the free-icon path apply state from it, and a profile
+                -- load in the swap window may have rewritten the settings
+                if ns.CDMGroups and ns.CDMGroups.RefreshCachedLayoutSettings then
+                    ns.CDMGroups.RefreshCachedLayoutSettings()
+                end
                 ArcAuras.RefreshAllSettings()
                 
                 -- ═══════════════════════════════════════════════════════════════════════════
@@ -5776,7 +5945,7 @@ function ArcAuras.CreateCatalogEntry(cdID, frame)
         -- Trinket slot
         itemID = GetInventoryItemID("player", id)
         if itemID then
-            local itemName, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(itemID)
+            local itemName, _, _, _, _, _, _, _, _, itemIcon = C_Item.GetItemInfo(itemID)
             name = itemName or ("Trinket " .. id)
             icon = itemIcon or GetInventoryItemTexture("player", id) or 134400
         else
@@ -5786,7 +5955,7 @@ function ArcAuras.CreateCatalogEntry(cdID, frame)
     elseif arcType == "item" and id then
         -- Generic item
         itemID = id
-        local itemName, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(id)
+        local itemName, _, _, _, _, _, _, _, _, itemIcon = C_Item.GetItemInfo(id)
         name = itemName or "Item"
         icon = itemIcon or 134400
     elseif arcType == "spell" and id then
@@ -5912,7 +6081,7 @@ function ArcAuras.GetItemInfoForArcID(cdID)
     if arcType == "trinket" then
         itemID = GetInventoryItemID("player", id)
         if itemID then
-            local itemName, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(itemID)
+            local itemName, _, _, _, _, _, _, _, _, itemIcon = C_Item.GetItemInfo(itemID)
             name = itemName
             icon = itemIcon or GetInventoryItemTexture("player", id)
         else
@@ -5921,7 +6090,7 @@ function ArcAuras.GetItemInfoForArcID(cdID)
         end
     elseif arcType == "item" then
         itemID = id
-        local itemName, _, _, _, _, _, _, _, _, itemIcon = GetItemInfo(id)
+        local itemName, _, _, _, _, _, _, _, _, itemIcon = C_Item.GetItemInfo(id)
         name = itemName
         icon = itemIcon or 134400
     end
