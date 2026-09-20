@@ -16,13 +16,16 @@
 -- the CAST spell, not the buff. We resolve the WHOLE candidate set from the CDM
 -- cooldownID via C_CooldownViewer.GetCooldownViewerCooldownInfo (C API, taint-safe).
 --
--- DUAL-UNIT (critical for debuffs): the CDM frame's auraDataUnit / the user's buff-vs-
--- debuff label CANNOT be trusted to route the aura to player vs target (CDM's selfAura
--- is not a routing flag; e.g. Flame Shock is selfAura=true yet lives on the target). So
--- for EVERY attach we create TWO slots -- player/HELPFUL + target/HARMFUL -- both driving
--- the same bar; whichever unit actually holds the aura populates and drives it, the other
--- stays empty (hidden by the engine). This is the proven AuraLab model. Ref:
--- E:\WoWDev\reference\CDM_cooldownID_to_spellID_resolution.md + ArcUI_AuraLab_Slots.lua.
+-- LANES (multi-unit): every attach carries a list of (unit, filter) lanes --
+-- resolved by ns.Display.ResolveAuraLanes from the bar's Type + On settings,
+-- or synthesized as the single legacy lane (buff -> player/HELPFUL, debuff ->
+-- target/HARMFUL|PLAYER) when the caller passes none. Each lane gets its own
+-- slot composition in that unit's container, all driving the same bar;
+-- whichever unit actually holds the aura populates and drives it, the others
+-- stay empty (hidden by the engine) -- the set reads as an OR, the aura
+-- icons' proven model. The CDM frame's auraDataUnit is never trusted for
+-- routing (selfAura is not a routing flag; Flame Shock reports "player" yet
+-- lives on the target).
 --
 -- Inert on live: the AuraContainer/AuraButton intrinsics don't exist on 12.0.x.
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -105,8 +108,11 @@ BD.logBuf = {}                      -- exposed so the (unshipped) debug tool can
 local logBuf, LOG_MAX = BD.logBuf, 300
 local logWin, logEdit
 local function Log(fmt, ...)
-  if not BD.debug then return end
+  local tap = ns.TraceTap
+  if not BD.debug and not tap then return end
   local msg = (select("#", ...) > 0) and fmt:format(...) or fmt
+  if tap then tap("BD", msg) end
+  if not BD.debug then return end
   logBuf[#logBuf + 1] = date("%H:%M:%S ") .. msg
   if #logBuf > LOG_MAX then table.remove(logBuf, 1) end
   -- NEVER to chat by default: this logs on every refresh of every bar, which
@@ -419,7 +425,10 @@ end
 local function ApplyOwnChromeToButton(button, oc)
   local ch = button._arcChrome
   if not oc then
-    if ch then ch.bgHost:Hide(); ch.borderHost:Hide() end
+    if ch then
+      ch.bgHost:Hide(); ch.borderHost:Hide()
+      if ch.nameHost then ch.nameHost:Hide() end
+    end
     return
   end
   if not ch then
@@ -513,6 +522,43 @@ local function ApplyOwnChromeToButton(button, oc)
   for i = n + 1, #pool do pool[i]:Hide() end
 
   ch.borderHost:SetShown(oc.borderShown or n > 0)
+
+  -- NAME TEXT (chrome copy of the native nameFrame -- recipe built by
+  -- Display's BuildOwnChromeName). Hosted on a button child so it shows and
+  -- hides with the aura natively; anchored by the recipe's offset from the
+  -- button center (button coordinates ARE fill coordinates). Without this the
+  -- engine-owned bar rendered NAMELESS: the native nameFrame is suppressed
+  -- while the engine owns the chrome, and nothing carried the name over.
+  local nm = oc.name
+  if nm then
+    local host = ch.nameHost
+    if not host then
+      host = CreateFrame("Frame", nil, button)
+      host:SetAllPoints(button)
+      ch.nameHost = host
+      ch.name = host:CreateFontString(nil, "OVERLAY")
+      ch.name:SetDrawLayer("OVERLAY", 6)
+    end
+    -- +11: one decisive level above the border strips' host (+10) so the
+    -- name clears the border and every overlay fill
+    host:SetFrameLevel(button:GetFrameLevel() + 11)
+    local fs = ch.name
+    -- SetFont returns false on a bad path (it does not raise) -- fall back
+    if not fs:SetFont(nm.fontPath, nm.fontSize or 14, nm.fontFlags or "OUTLINE") then
+      fs:SetFont("Fonts\\FRIZQT__.TTF", nm.fontSize or 14, "OUTLINE")
+    end
+    fs:SetShadowOffset(nm.shadowX or 1, nm.shadowY or -1)
+    local sc = nm.shadowColor or { r = 0, g = 0, b = 0, a = 1 }
+    fs:SetShadowColor(sc.r or 0, sc.g or 0, sc.b or 0, sc.a or 1)
+    local c = nm.color or { r = 1, g = 1, b = 1, a = 1 }
+    fs:SetTextColor(c.r or 1, c.g or 1, c.b or 1, c.a or 1)
+    fs:SetText(nm.text)
+    fs:ClearAllPoints()
+    fs:SetPoint("CENTER", button, "CENTER", nm.dx or 0, nm.dy or 0)
+    host:Show()
+  elseif ch.nameHost then
+    ch.nameHost:Hide()
+  end
 end
 
 -- Live chrome sync for an already-attached bar (Hide When Inactive toggled,
@@ -522,9 +568,12 @@ function BD.SetOwnChrome(barFrame, oc)
   local a = attached[barFrame]
   if not a then return end
   if C_Secrets and C_Secrets.ShouldAurasBeSecret and C_Secrets.ShouldAurasBeSecret() then return end
-  local sub = a.subs and a.subs[1]
-  if sub and sub.initFired and sub.button then
-    ApplyOwnChromeToButton(sub.button, oc)
+  -- every LANE's base sub carries the chrome (multi-unit bars: whichever
+  -- lane's aura is active shows the bar's background/border)
+  for _, sub in ipairs(a.subs or {}) do
+    if sub.isBase and sub.initFired and sub.button then
+      ApplyOwnChromeToButton(sub.button, oc)
+    end
   end
 end
 
@@ -668,6 +717,30 @@ end
 -- Wire ONE AuraButton's own ArcBar/ArcTimer regions to overlay barFrame.bar / fs. Called from each
 -- slot's initializeFrame; stores the regions on the sub. Multiple subs (player + target) overlay the
 -- SAME bar -- only the populated one shows, so the aura is found on whichever unit actually holds it.
+-- BAR STACK FORMATTER (2026-08-30 — the rule: bars count from 1). The
+-- engine's default application-count formatter hides the number at 0 AND 1
+-- stack (CDM icon parity) — right for icons, wrong for stack BARS: a
+-- 1-stack Freezing bar showed no number until 2+ ("stack text missing at
+-- 0/1 stacks" report; pre-3.8 CDM-scanned bars never went through this
+-- binding). ONE persistent NumericRuleFormatter shared by every bar stack
+-- binding: hidden at 0, plain number from 1 up. The engine stores the
+-- object and calls FormatNumber on it C-side on every aura update, so the
+-- (secret) count never touches Lua. nil (pre-formatter clients) falls back
+-- to the engine default exactly as before.
+local barStackFormatter
+local function GetBarStackFormatter()
+  if barStackFormatter ~= nil then return barStackFormatter or nil end
+  local f = C_StringUtil and C_StringUtil.CreateNumericRuleFormatter
+    and C_StringUtil.CreateNumericRuleFormatter()
+  if f then
+    f:SetBreakpoints({ { threshold = 0, format = "" }, { threshold = 1, format = "%d" } })
+    barStackFormatter = f
+  else
+    barStackFormatter = false
+  end
+  return barStackFormatter or nil
+end
+
 local function WireSub(button, barFrame, fs, opts, sub)
   sub.initFired = true
   diag.initFired = diag.initFired + 1
@@ -915,13 +988,14 @@ local function WireSub(button, barFrame, fs, opts, sub)
 
   -- Stack count on the button's OWN fontstring, overlaid on the bar's stack text.
   -- SetApplicationCount is the engine binding the aura icons use: the (secret in
-  -- restricted content) applications count is written C-side; engine default
-  -- hides it at 0/1 stacks (CDM parity).
+  -- restricted content) applications count is written C-side. Bound with the
+  -- bar formatter (number from 1 up) — the engine DEFAULT hides 0/1, which is
+  -- CDM icon parity but wrong for bars (see GetBarStackFormatter above).
   local sh = button.ArcStackHolder
   local as = sh and sh.ArcStacks
   sub.arcStacks, sub.stackHolder = as, sh
   if opts.stacksText and as and button.SetApplicationCount then
-    button:SetApplicationCount(as, {})
+    button:SetApplicationCount(as, { formatter = GetBarStackFormatter() })
     if as.SetDrawLayer then as:SetDrawLayer("OVERLAY", 7) end
     -- plain assignment, NOT `x and f()`: the `and` expression truncates
     -- GetFont's multiple returns to one (nil height -> SetFont usage error
@@ -994,7 +1068,9 @@ local function BuildLayerColors(opts)
   return t
 end
 
--- BD.Attach(barFrame, fs, cooldownID, trackedSpellID, unit, opts)  -- `unit` is a hint only; both are tried.
+-- BD.Attach(barFrame, fs, cooldownID, trackedSpellID, unit, opts)
+-- opts.lanes / opts.lanesKey (from ns.Display.ResolveAuraLanes) select the
+-- unit lanes; without them `unit` synthesizes the single legacy lane.
 function BD.Attach(barFrame, fs, cooldownID, trackedSpellID, unit, opts)
   diag.attachCall = diag.attachCall + 1
   -- exclusive with the CDM mirror mode (Display routes a bar to ONE lane)
@@ -1006,6 +1082,24 @@ function BD.Attach(barFrame, fs, cooldownID, trackedSpellID, unit, opts)
   if not idKey then diag.badArgs = diag.badArgs + 1; Log("Attach: no cooldownID or trackedSpellID"); return end
 
   if BD.loadWindow then diag.prebuild = diag.prebuild + 1 end
+
+  -- LANES (multi-unit aura bars, the aura icons' model): each lane is a
+  -- (unit token, aura filter) pair and gets its OWN slot composition in that
+  -- unit's container, all driving the same bar -- the set reads as an OR.
+  -- Callers that pass no opts.lanes (textures, older sites) get the single
+  -- legacy lane synthesized from `unit`, which is byte-identical to the old
+  -- behavior (target = own debuffs only, everything else HELPFUL).
+  local lanes = opts.lanes
+  if not lanes or #lanes == 0 then
+    local u = unit or "player"
+    lanes = { { unit = u, filter = (u == "target") and "HARMFUL|PLAYER" or "HELPFUL" } }
+  end
+  local lanesKey = opts.lanesKey
+  if not lanesKey then
+    local kparts = {}
+    for i, l in ipairs(lanes) do kparts[i] = l.unit .. ":" .. l.filter end
+    lanesKey = table.concat(kparts, ",")
+  end
 
   local spellIDs = BD.ResolveCandidateSpellIDs(cooldownID, trackedSpellID)
   if not next(spellIDs) then
@@ -1024,17 +1118,17 @@ function BD.Attach(barFrame, fs, cooldownID, trackedSpellID, unit, opts)
   -- Under secrecy the old wiring keeps driving and the flush re-runs this.
   local wantStacks = opts.stacksText ~= nil
   if prev and prev.idKey == idKey
-     and (prev.unit ~= (unit or "player") or (prev.stacksWired == true) ~= wantStacks
+     and ((prev.lanesKey or "") ~= lanesKey or (prev.stacksWired == true) ~= wantStacks
           or (prev.applicationMax or 0) ~= (opts.applicationMax or 0)
           or (prev.bandsKey or "") ~= (opts.bandsKey or "")) then
     if C_Secrets and C_Secrets.ShouldAurasBeSecret and C_Secrets.ShouldAurasBeSecret() then
       diag.combatDefer = diag.combatDefer + 1
       pending[barFrame] = { fs = fs, cooldownID = cooldownID, trackedSpellID = trackedSpellID, unit = unit, opts = opts }
-      Log("Attach: rewire needed (unit %s->%s, stacks %s->%s) under secrecy -> deferred",
-        tostring(prev.unit), tostring(unit), tostring(prev.stacksWired), tostring(wantStacks))
+      Log("Attach: rewire needed (lanes %s->%s, stacks %s->%s) under secrecy -> deferred",
+        tostring(prev.lanesKey), tostring(lanesKey), tostring(prev.stacksWired), tostring(wantStacks))
     else
-      Log("Attach: rewire (unit %s->%s, stacks %s->%s) -> recreating slot",
-        tostring(prev.unit), tostring(unit), tostring(prev.stacksWired), tostring(wantStacks))
+      Log("Attach: rewire (lanes %s->%s, stacks %s->%s) -> recreating slot",
+        tostring(prev.lanesKey), tostring(lanesKey), tostring(prev.stacksWired), tostring(wantStacks))
       BD.Detach(barFrame)
       prev = nil
     end
@@ -1056,8 +1150,10 @@ function BD.Attach(barFrame, fs, cooldownID, trackedSpellID, unit, opts)
     -- re-attach path replays req.opts, and a stale req reinstated the previous
     -- colours/steps over the current ones (the "old colour stayed" bug).
     local newColors = BuildLayerColors(opts)
-    for i, sub in ipairs(prev.subs or {}) do
-      local c = newColors[i]
+    for _, sub in ipairs(prev.subs or {}) do
+      -- layerIdx, not the subs index: multi-lane repeats the layer sequence
+      -- per lane, so the flat index no longer maps onto the color list
+      local c = sub.layerIdx and newColors[sub.layerIdx]
       if c and not sub.shade then
         sub.bandColor = c
         if not aurasSecret and sub.arcBar then
@@ -1086,14 +1182,16 @@ function BD.Attach(barFrame, fs, cooldownID, trackedSpellID, unit, opts)
       ((gb and gb.GetReverseFill and gb:GetReverseFill()) and 1) or 0)
     local geomChanged = prev.geomSig ~= geomSig
     prev.geomSig = geomSig
-    for si, sub in ipairs(prev.subs or {}) do
+    for _, sub in ipairs(prev.subs or {}) do
       if filtersMoved and sub.container and sub.key and sub.container.SetAuraSlotCandidateFilters then
         sub.container:SetAuraSlotCandidateFilters(sub.key, { includeSpellIDs = spellIDs })
         refreshed = refreshed or {}
         refreshed[sub.container] = true
       end
       if not aurasSecret and sub.initFired and sub.button then
-        ApplyOwnChromeToButton(sub.button, si == 1 and opts.ownChrome or nil)
+        -- chrome lives on every LANE's base sub (isBase), so whichever lane's
+        -- aura is active carries the bar's background/border with it
+        ApplyOwnChromeToButton(sub.button, sub.isBase and opts.ownChrome or nil)
         sub.button:SetFrameStrata(barFrame:GetFrameStrata())
         sub.button:SetFrameLevel((((barFrame.bar and barFrame.bar:GetFrameLevel()) or barFrame:GetFrameLevel()) or 1) + 1 + (sub.levelBoost or 0))
         if geomChanged or sub.geomPending then
@@ -1138,6 +1236,19 @@ function BD.Attach(barFrame, fs, cooldownID, trackedSpellID, unit, opts)
     return
   end
 
+  -- ID CHANGED while attached (custom bar spell edited / bar reconfigured to
+  -- a different aura): reaching here with a prev record means prev.idKey ~=
+  -- idKey — the old slots would keep DRIVING this bar's widgets from the OLD
+  -- aura (ghost fill/text) while the new attach builds beside them. Detach
+  -- first; Detach parks filters + retires containers and is legal in any
+  -- context, so it runs even when the create below defers under secrecy.
+  if prev then
+    Log("Attach: idKey changed (%s -> %s) -> detaching old wiring first",
+      tostring(prev.idKey), tostring(idKey))
+    BD.Detach(barFrame)
+    prev = nil
+  end
+
   -- RC 69189+: AddAuraSlot's frame provider reparents (CreateFrameOutbound +
   -- SetParent), and that reparent is BLOCKED from addon stacks while auras
   -- are SECRET (instances 24/7, combat) — creating a slot would die inside
@@ -1156,115 +1267,163 @@ function BD.Attach(barFrame, fs, cooldownID, trackedSpellID, unit, opts)
     return
   end
 
-  -- Route by the caller's buff/debuff PICKER (passed as `unit`): buff -> player/HELPFUL, debuff ->
-  -- target/HARMFUL. That is the reliable signal; the CDM frame's auraDataUnit is NOT (selfAura
-  -- entries like Flame Shock report "player" even though the aura lives on the target).
+  -- Route by the caller's PICKER (the lanes list; single legacy lane when no
+  -- opts.lanes). That is the reliable signal; the CDM frame's auraDataUnit is
+  -- NOT (selfAura entries like Flame Shock report "player" even though the
+  -- aura lives on the target).
+  --
+  -- Filter by LANE SEMANTICS, never live unit state: UnitCanAssist("player",
+  -- "pet") is FALSE while the pet does not exist — which is exactly the case
+  -- during the login prebuild — so the pet slot got baked with a HARMFUL
+  -- filter for the whole session and the pet's buff could never match (the
+  -- "empty pet bar after every reload" bug). Each lane's filter is fixed by
+  -- design at resolve time (Display.ResolveAuraLanes / the legacy synth
+  -- above): harmful lanes default to the player's OWN debuffs (|PLAYER —
+  -- plain HARMFUL lit bars up for ANY ally's copy of the debuff, e.g. a
+  -- second Arms warrior's Colossus Smash) unless the user opted into other
+  -- players' copies; helpful lanes are HELPFUL (any source — external buffs
+  -- must match) unless own-only is on.
   unit = unit or "player"
-  local c = EnsureContainer(unit, barFrame)
-  if not c or not c.AddAuraSlot then
-    diag.combatDefer = diag.combatDefer + 1
-    pending[barFrame] = { fs = fs, cooldownID = cooldownID, trackedSpellID = trackedSpellID, unit = unit, opts = opts }
-    Log("Attach: container(%s) not ready -> pending (cd=%s)", unit, tostring(cooldownID))
-    return
+
+  -- Pre-create EVERY lane's container first: if any is unavailable (combat on
+  -- a pre-PTR7 client), defer the whole attach rather than building a partial
+  -- lane set.
+  local laneContainers = {}
+  for i, lane in ipairs(lanes) do
+    local c = EnsureContainer(lane.unit, barFrame)
+    if not c or not c.AddAuraSlot then
+      diag.combatDefer = diag.combatDefer + 1
+      pending[barFrame] = { fs = fs, cooldownID = cooldownID, trackedSpellID = trackedSpellID, unit = unit, opts = opts }
+      Log("Attach: container(%s) not ready -> pending (cd=%s)", lane.unit, tostring(cooldownID))
+      return
+    end
+    laneContainers[i] = c
   end
-  local assist = (unit == "player") or (UnitCanAssist and UnitCanAssist("player", unit))
-  local filter = assist and "HELPFUL" or "HARMFUL"
+
   -- threshold overlays present -> colour/texture split: the base goes FLAT
   -- too (the shade slot below carries the texture for every layer at once)
   local nSteps = opts.applicationSteps and #opts.applicationSteps or 0
   local nDur   = opts.durationSteps and #opts.durationSteps or 0
   local nBands = opts.applicationBands and #opts.applicationBands or 0
   opts.flatFill = (nSteps > 0 or nDur > 0 or nBands > 0) or nil
-  local subs = { CreateSub(c, filter, spellIDs, barFrame, fs, opts) }
 
-  -- Threshold band overlays (stack bars): one extra slot per band, fill-only
-  -- (no text opts), saturating maxApplications + fractional width + locked
-  -- color. Smaller thresholds get higher levels (drawn on top).
-  for _, band in ipairs(opts.applicationBands or {}) do
-    subs[#subs + 1] = CreateSub(c, filter, spellIDs, barFrame, nil, {
-      applicationMax = band.max,
-      interpolation  = opts.interpolation,
-      baseColor      = band.color,
-      fillWidthFrac  = band.widthFrac,
-      fillLevelBoost = band.boost,
-      lockColor      = true,
-    })
-  end
+  -- ONE full layer composition PER LANE, every lane's stack in its own
+  -- unit's container, all driving the same bar. sub.layerIdx records the
+  -- position in the per-lane layer sequence (base=1, bands, step pairs,
+  -- duration layers) so colour pushes stay correct across lanes.
+  local subs = {}
+  for li, lane in ipairs(lanes) do
+    local c, filter = laneContainers[li], lane.filter
+    local layerIdx = 0
+    local function AddLaneSub(fsArg, subOpts)
+      layerIdx = layerIdx + 1
+      local sub = CreateSub(c, filter, spellIDs, barFrame, fsArg, subOpts)
+      sub.layerIdx = layerIdx
+      subs[#subs + 1] = sub
+      return sub
+    end
 
-  -- Continuous step overlays (whole-fill color switch): TWO slots per
-  -- threshold in this bar's container, each masked to its region (see the
-  -- step block above). P paints [T..count] (max=maxStacks, bar
-  -- interpolation -- edge tracks the base fill); Q covers [0..T] once count
-  -- reaches T (max=T, Immediate). Higher thresholds draw on top.
-  for _, st in ipairs(opts.applicationSteps or {}) do
-    local frac = st.threshold / math.max(opts.applicationMax or 1, 1)
-    subs[#subs + 1] = CreateSub(c, filter, spellIDs, barFrame, nil, {
-      applicationMax = opts.applicationMax,
-      interpolation  = opts.interpolation,
-      baseColor      = st.color,
-      stepKind       = "upper",
-      stepFrac       = frac,
-      stepT          = st.threshold,
-      fillLevelBoost = st.boost,
-      lockColor      = true,
-    })
-    subs[#subs + 1] = CreateSub(c, filter, spellIDs, barFrame, nil, {
-      applicationMax = st.threshold,
-      interpolation  = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.Immediate or nil,
-      baseColor      = st.color,
-      stepKind       = "lower",
-      stepFrac       = frac,
-      stepT          = st.threshold,
-      fillLevelBoost = st.boost,
-      lockColor      = true,
-    })
-  end
+    local base = AddLaneSub(fs, opts)
+    base.isBase = true
 
-  -- DURATION threshold layers (colour by remaining time). Each entry is one
-  -- layer with an explicit level boost, built by ns.Display in the order the
-  -- composition needs; TRACK layers follow the fill, STEP layers gate on the
-  -- threshold. All flat-filled; the shade slot below re-applies the texture.
-  for _, d in ipairs(opts.durationSteps or {}) do
-    subs[#subs + 1] = CreateSub(c, filter, spellIDs, barFrame, nil, {
-      direction      = opts.direction,
-      interpolation  = d.step and (Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.Immediate) or opts.interpolation,
-      baseColor      = d.color,
-      durSide        = d.side,
-      durFrac        = d.frac,
-      durStep        = d.step,
-      fillLevelBoost = d.boost,
-      lockColor      = true,
-    })
-  end
+    -- Threshold band overlays (stack bars): one extra slot per band, fill-only
+    -- (no text opts), saturating maxApplications + fractional width + locked
+    -- color. Smaller thresholds get higher levels (drawn on top).
+    for _, band in ipairs(opts.applicationBands or {}) do
+      AddLaneSub(nil, {
+        applicationMax = band.max,
+        interpolation  = opts.interpolation,
+        baseColor      = band.color,
+        fillWidthFrac  = band.widthFrac,
+        fillLevelBoost = band.boost,
+        lockColor      = true,
+        -- sub-opts do NOT inherit the parent's flatFill: without this the
+        -- band layers carried the USER texture mapped across their own
+        -- (fractional) fills - per-band restarting gradient ramps, double-
+        -- shaded by the MOD slot (Arc's "colors are a bit off" report).
+        -- Steps pass stepKind and duration layers durSide; bands were the
+        -- one naked layer kind.
+        flatFill       = true,
+      })
+    end
 
-  -- SHADE slot (only with threshold overlays): the user's texture in white,
-  -- MOD blended, spanning the same fill on TOP of every flat colour layer --
-  -- gives all of them the same texture shading with one correctly-mapped fill.
-  if nSteps > 0 or nDur > 0 or nBands > 0 then
-    -- above EVERY colour layer, whatever composition built them
-    local shadeBoost = 1
-    for _, b in ipairs(opts.applicationBands or {}) do shadeBoost = math.max(shadeBoost, (b.boost or 0) + 1) end
-    for _, st in ipairs(opts.applicationSteps or {}) do shadeBoost = math.max(shadeBoost, (st.boost or 0) + 1) end
-    for _, d in ipairs(opts.durationSteps or {}) do shadeBoost = math.max(shadeBoost, (d.boost or 0) + 1) end
-    subs[#subs + 1] = CreateSub(c, filter, spellIDs, barFrame, nil, {
-      applicationMax = opts.applicationMax,
-      direction      = opts.direction,
-      interpolation  = opts.interpolation,
-      shade          = true,
-      fillLevelBoost = shadeBoost,
-    })
+    -- Continuous step overlays (whole-fill color switch): TWO slots per
+    -- threshold in this lane's container, each masked to its region (see the
+    -- step block above). P paints [T..count] (max=maxStacks, bar
+    -- interpolation -- edge tracks the base fill); Q covers [0..T] once count
+    -- reaches T (max=T, Immediate). Higher thresholds draw on top.
+    for _, st in ipairs(opts.applicationSteps or {}) do
+      local frac = st.threshold / math.max(opts.applicationMax or 1, 1)
+      AddLaneSub(nil, {
+        applicationMax = opts.applicationMax,
+        interpolation  = opts.interpolation,
+        baseColor      = st.color,
+        stepKind       = "upper",
+        stepFrac       = frac,
+        stepT          = st.threshold,
+        fillLevelBoost = st.boost,
+        lockColor      = true,
+      })
+      AddLaneSub(nil, {
+        applicationMax = st.threshold,
+        interpolation  = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.Immediate or nil,
+        baseColor      = st.color,
+        stepKind       = "lower",
+        stepFrac       = frac,
+        stepT          = st.threshold,
+        fillLevelBoost = st.boost,
+        lockColor      = true,
+      })
+    end
+
+    -- DURATION threshold layers (colour by remaining time). Each entry is one
+    -- layer with an explicit level boost, built by ns.Display in the order the
+    -- composition needs; TRACK layers follow the fill, STEP layers gate on the
+    -- threshold. All flat-filled; the shade slot below re-applies the texture.
+    for _, d in ipairs(opts.durationSteps or {}) do
+      AddLaneSub(nil, {
+        direction      = opts.direction,
+        interpolation  = d.step and (Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.Immediate) or opts.interpolation,
+        baseColor      = d.color,
+        durSide        = d.side,
+        durFrac        = d.frac,
+        durStep        = d.step,
+        fillLevelBoost = d.boost,
+        lockColor      = true,
+      })
+    end
+
+    -- SHADE slot (only with threshold overlays): the user's texture in white,
+    -- MOD blended, spanning the same fill on TOP of every flat colour layer --
+    -- gives all of them the same texture shading with one correctly-mapped fill.
+    if nSteps > 0 or nDur > 0 or nBands > 0 then
+      -- above EVERY colour layer, whatever composition built them
+      local shadeBoost = 1
+      for _, b in ipairs(opts.applicationBands or {}) do shadeBoost = math.max(shadeBoost, (b.boost or 0) + 1) end
+      for _, st in ipairs(opts.applicationSteps or {}) do shadeBoost = math.max(shadeBoost, (st.boost or 0) + 1) end
+      for _, d in ipairs(opts.durationSteps or {}) do shadeBoost = math.max(shadeBoost, (d.boost or 0) + 1) end
+      AddLaneSub(nil, {
+        applicationMax = opts.applicationMax,
+        direction      = opts.direction,
+        interpolation  = opts.interpolation,
+        shade          = true,
+        fillLevelBoost = shadeBoost,
+      })
+    end
   end
 
   -- lock each layer's colour so restyles cannot reset a composed layer to the
   -- plain bar colour (the base carries the composition's own base, which for
   -- band mode is the TOP band's colour, not cfg.barColor)
   local layerColors = BuildLayerColors(opts)
-  for i, sub in ipairs(subs) do
-    if layerColors[i] and not sub.shade then sub.bandColor = layerColors[i] end
+  for _, sub in ipairs(subs) do
+    local col = layerColors[sub.layerIdx]
+    if col and not sub.shade then sub.bandColor = col end
   end
 
   attached[barFrame] = {
     idKey = idKey, cooldownID = cooldownID, spellIDs = spellIDs, subs = subs, unit = unit,
+    lanesKey = lanesKey,
     decimals = opts.durDecimals, textColorEnabled = opts.textColorEnabled,
     colorKey = opts.colorKey, stacksWired = wantStacks,
     applicationMax = opts.applicationMax, bandsKey = opts.bandsKey,
@@ -1274,7 +1433,7 @@ function BD.Attach(barFrame, fs, cooldownID, trackedSpellID, unit, opts)
     -- so binding changes are served by recreating the slot from this request
     req = { fs = fs, cooldownID = cooldownID, trackedSpellID = trackedSpellID, unit = unit, opts = opts },
   }
-  Log("Attach: %s/%s {%s} (cd=%s)", unit, filter, SetKeys(spellIDs), tostring(cooldownID))
+  Log("Attach: [%s] {%s} (cd=%s)", lanesKey, SetKeys(spellIDs), tostring(cooldownID))
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -1312,7 +1471,12 @@ local function MirrorHookBar(srcBar)
   hooksecurefunc(srcBar, "SetValue", function(self, v)
     for ourFrame, rec in pairs(mirrorByBar) do
       if rec.srcBar == self and ourFrame.bar and MirrorSourceValid(rec) then
-        ourFrame.bar:SetValue(v)
+        -- SMOOTHING: SetValue's second argument is the interpolation enum, and it
+        -- is NeverSecret -- we supply it, so a secret value animates fine. The
+        -- mirror simply never passed one, so every push was Immediate and the bar
+        -- stepped. rec.interp is nil when the user has Smooth Fill off, which is
+        -- the documented default (Immediate).
+        ourFrame.bar:SetValue(v, rec.interp)
         mirDiag.value = mirDiag.value + 1
         -- DURATION TEXT (Arc's call: value-derived ONLY -- the normal text
         -- sources are cut out entirely in mirror mode): whole seconds from
@@ -1337,8 +1501,25 @@ local function MirrorHookBar(srcBar)
         -- the INACTIVE push is literal SetMinMaxValues(0, 0) -- non-secret
         -- constants, so this compare is safe -- clear the mirrored text so no
         -- stale number lingers after the timer ends
-        if rec.fs and not (issecretvalue and issecretvalue(mx)) and mx == 0 then
+        local inactive = not (issecretvalue and issecretvalue(mx)) and mx == 0
+        if rec.fs and inactive then
           rec.fs:SetText("")
+        end
+        -- FILL-MODE LAYER (Display's ApplyMirrorFillLayer): it paints the gap the
+        -- drain texture leaves behind, so an inactive entry -- zero-width drain --
+        -- would leave the whole bar looking FULL. The active push carries a SECRET
+        -- duration, so "mx is secret" is itself the active signal.
+        -- gate on the MODE FLAG, not on the texture existing: the texture is
+        -- pooled and merely hidden when the user switches back to drain
+        local fillTex = ourFrame._mirrorFillActive and ourFrame._mirrorFillTex
+        if fillTex then
+          fillTex:SetShown(not inactive)
+          -- re-assert the drain's alpha-0 at the timer edge: ApplyAppearance can
+          -- run between bar updates and restore it, which would put the mirrored
+          -- drain back on top of the fill layer. (Keep Texture Still also
+          -- keeps the drain INVISIBLE -- its texture only supplies the mask's
+          -- boundary anchors, which track on an alpha-0 StatusBar.)
+          if not inactive then ourFrame.bar:SetAlpha(0) end
         end
       end
     end
@@ -1352,11 +1533,12 @@ end
 -- update): re-resolves the CDM item frame each time, so CDM frame
 -- reassignment self-heals on the next update. Returns true when a bar-kind
 -- CDM item was found and hooked.
-function BD.AttachMirror(barFrame, fs, cooldownID)
+function BD.AttachMirror(barFrame, fs, cooldownID, interp)
   if not (barFrame and cooldownID and cooldownID > 0) then return false end
   local rec = mirrorByBar[barFrame] or {}
   rec.cooldownID = cooldownID
   rec.fs = fs
+  rec.interp = interp   -- StatusBarInterpolation for the mirrored SetValue (nil = Immediate)
   mirrorByBar[barFrame] = rec
   -- registry lookups are COLON methods (self = the registry)
   local f = ns.FrameRegistry and ns.FrameRegistry.GetValidFrameForCooldownID
@@ -1405,6 +1587,23 @@ function BD.Detach(barFrame)
       if sub.container.UpdateAllAuras then sub.container:UpdateAllAuras() end
     end
   end
+  -- RETIRE the owner's containers outright (hide + evict) so the NEXT Attach
+  -- builds FRESH ones. THE AURA-ICONS LAW, now enforced here too: a container
+  -- that has lived through combat carries forbidden aspects from displaying
+  -- secret data, and a later AddAuraSlot into it dies inside Blizzard's frame
+  -- provider ("child would inherit forbidden aspects"). Re-slotting the
+  -- cached container is why EVERY post-combat rewire — threshold band edits
+  -- (ApplyStyle's recreate), the options panel's texture detach/re-attach —
+  -- left the binding dead until a reload. One container, ONE AddAuraSlot,
+  -- ever. Hiding retires it (buttons are its children); the leaked invisible
+  -- 1x1 frame per rewire is the same accepted cost as the aura icons module.
+  local perOwner = containers[barFrame]
+  if perOwner then
+    for _, c in pairs(perOwner) do
+      if c.Hide then c:Hide() end
+    end
+    containers[barFrame] = nil
+  end
 end
 
 function BD.DetachAll()
@@ -1438,6 +1637,8 @@ function BD.ApplyStyle(barFrame, durationFrame, showDuration, decimals, duration
   end
   if blocked then
     styleDeferred[barFrame] = { durationFrame, showDuration, decimals, durationColor, baseColor, fillDirection, durFormatter, textColorEnabled, colorKey }
+    Log("ApplyStyle: BLOCKED (buttons forbidden) -> deferred (cd=%s key %s->%s)",
+      tostring(a.cooldownID), tostring(a.colorKey), tostring(colorKey))
     return
   end
   styleDeferred[barFrame] = nil
@@ -1459,6 +1660,9 @@ function BD.ApplyStyle(barFrame, durationFrame, showDuration, decimals, duration
   -- therefore served by RECREATING the slot: a fresh AddAuraSlot wires the new
   -- formatter/direction inside its own init window (legal even in combat).
   if (formatterChanged or directionChanged) and a.req then
+    Log("ApplyStyle: RECREATE (cd=%s, fmtChanged=%s dirChanged=%s, key %s -> %s, dec %s -> %s)",
+      tostring(a.cooldownID), tostring(formatterChanged), tostring(directionChanged),
+      tostring(a.colorKey), tostring(colorKey), tostring(a.decimals), tostring(decimals))
     local req = a.req
     req.opts.durDecimals      = decimals
     req.opts.durFormatter     = durFormatter
@@ -1519,6 +1723,16 @@ function BD.ApplyStyle(barFrame, durationFrame, showDuration, decimals, duration
       ReassertStepGeometry(sub, barFrame)
       ReassertDurGeometry(sub, barFrame)
     end
+    if at then
+      -- THE TOGGLE IS THE DEADLINE: Show Duration OFF must hide the engine's
+      -- ArcTimer holder NOW — the timer is engine-driven and keeps counting
+      -- otherwise ("disabled duration text but it still shows on the bar").
+      -- Holder writes are legal here: the blocked path above already
+      -- deferred us when the button partition is forbidden. ON re-shows it.
+      if sub.holder and sub.holder.SetShown then
+        sub.holder:SetShown(showDuration and true or false)
+      end
+    end
     if at and showDuration then
       if sub.holder and durationFrame and sub.holder.SetFrameLevel then
         sub.holder:SetFrameStrata(durationFrame:GetFrameStrata())
@@ -1536,22 +1750,83 @@ function BD.ApplyStyle(barFrame, durationFrame, showDuration, decimals, duration
   a.decimals = decimals
   a.textColorEnabled = textColorEnabled
   a.colorKey = colorKey
+  a.showDuration = showDuration and true or false
+  Log("ApplyStyle: plain restyle done (cd=%s key=%s tce=%s)",
+    tostring(a.cooldownID), tostring(colorKey), tostring(textColorEnabled))
 end
 
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- CONTAINER REPAIR (12.1 engine bug -- full write-up in ns.CDMShared)
+-- Candidate filters fail OPEN whenever UnitCanAssist fails (vehicles,
+-- cinematics, faction change, range, encounter end), so a bar can start lighting
+-- on an ARBITRARY aura. Bars previously had NO re-assertion at all: filters were
+-- written at attach/retarget/detach and never re-pushed, so a bar that lost its
+-- filter mid-fight stayed wrong until the next attach.
+-- Cycle the container (SetEnabled is guarded on change, so only false->true
+-- re-registers events and refreshes), then re-push each sub's believed-correct
+-- filter. Data-only, so it is legal in combat.
+-- ═══════════════════════════════════════════════════════════════════════════
+function BD.RepairContainers()
+  local Sh = ns.CDMShared
+  if Sh and Sh.RepairAuraContainer then
+    for _, perOwner in pairs(containers) do
+      for _, c in pairs(perOwner) do
+        Sh.RepairAuraContainer(c)
+      end
+    end
+  end
+  -- Re-push what each live sub should be filtering on. Everything still in
+  -- attached[] IS live: Detach parks the filters and then clears the entry
+  -- (attached[barFrame] = nil, ~line 1429), so there is no parked state to
+  -- preserve here and no need to branch on one.
+  for _, a in pairs(attached) do
+    local subs = a and a.subs
+    if subs and a.spellIDs then
+      for _, sub in pairs(subs) do
+        if sub.container and sub.key and sub.container.SetAuraSlotCandidateFilters then
+          sub.container:SetAuraSlotCandidateFilters(sub.key, { includeSpellIDs = a.spellIDs })
+        end
+      end
+    end
+  end
+end
 -- ── combat deferral + eager container creation + target-swap refresh ─────────
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")   -- zone-out ends instance secrecy without a regen
 ev:RegisterEvent("PLAYER_TARGET_CHANGED")
-ev:SetScript("OnEvent", function(_, event)
-  if event == "PLAYER_TARGET_CHANGED" then
-    -- Target containers do NOT self-refresh on target swap (they only react to their own unit's
-    -- UNIT_AURA), so a target debuff bar/text goes stale until the new target fires an aura event.
-    -- Force a full re-parse of every non-player container. (The exact debuff bug the AuraLab found.)
+ev:RegisterEvent("PLAYER_FOCUS_CHANGED")  -- focus lanes (multi-unit bars): focus identity changed
+ev:RegisterEvent("GROUP_ROSTER_UPDATE")   -- party lanes: party1..4 identities changed
+ev:RegisterEvent("UNIT_PET")            -- pet summoned/dismissed/replaced: pet containers go stale
+ev:SetScript("OnEvent", function(_, event, evUnit)
+  -- LAZY REPAIR REGISTRATION. This file loads BEFORE ArcUI_CDM_Shared.lua (toc
+  -- line 42 vs 93), so ns.CDMShared does not exist at our file scope. Register
+  -- on the first event we receive instead, by which point every file is loaded.
+  -- Idempotent on the CDMShared side, so repeating it costs nothing.
+  if ns.CDMShared and ns.CDMShared.RegisterAuraContainerRepair then
+    ns.CDMShared.RegisterAuraContainerRepair(BD.RepairContainers)
+  end
+  if event == "PLAYER_TARGET_CHANGED" or event == "PLAYER_FOCUS_CHANGED"
+     or event == "GROUP_ROSTER_UPDATE" or (event == "UNIT_PET" and evUnit == "player") then
+    -- Non-player containers do NOT self-refresh when their unit's IDENTITY changes (they only
+    -- react to their own unit's UNIT_AURA), so a target debuff bar goes stale on target swap and
+    -- a pet bar on summon/dismiss — same for focus swaps and party roster changes. Force a full
+    -- re-parse of the affected containers.
+    -- (The exact debuff bug the AuraLab found; pet lane added with the Dark Transformation fix.)
+    local wantUnit = (event == "UNIT_PET") and "pet"
+      or (event == "PLAYER_FOCUS_CHANGED") and "focus"
+      or (event == "GROUP_ROSTER_UPDATE") and "party"
+      or nil   -- nil = every non-player unit
     for _, perOwner in pairs(containers) do
       for unit, c in pairs(perOwner) do
-        if unit ~= "player" and c.UpdateAllAuras then c:UpdateAllAuras() end
+        if unit ~= "player"
+           and (not wantUnit or unit == wantUnit
+                or (wantUnit == "party" and unit:sub(1, 5) == "party"))
+           and c.UpdateAllAuras then
+          c:UpdateAllAuras()
+        end
       end
     end
     return
@@ -1585,13 +1860,17 @@ end)
 SLASH_ARCBARDUR1 = "/arcbardur"
 SlashCmdList["ARCBARDUR"] = function(msg)
   msg = (msg or ""):gsub("%s+", ""):lower()
-  -- PERSISTED: the interesting failures happen during the LOAD WINDOW, before
-  -- any slash command can run, so the flag has to survive a /reload.
+  -- The saved flag is written for a future load-window capture but nothing reads
+  -- it back at load, so debug is ALWAYS off after a reload (BD.debug = false at
+  -- file scope). That is deliberate for now: the trace builds a table per
+  -- duration-bar refresh, so a diagnostic that silently survives reloads would
+  -- cost every user who ever ran it once. Do not advertise persistence until a
+  -- restore is actually wired.
   if msg == "debug" or msg == "on" then
     BD.debug = true
     local g = ns.API and ns.API.GetGlobalDB and ns.API.GetGlobalDB()
     if g then g.barDurDebug = true end
-    print("|cff33ff99[ArcBarDur]|r debug ON and SAVED (survives /reload). '/arcbardur log' opens the copyable window.")
+    print("|cff33ff99[ArcBarDur]|r debug ON for THIS session (a /reload clears it). '/arcbardur log' opens the copyable window.")
     return
   end
   if msg == "off" then
@@ -1711,8 +1990,10 @@ SlashCmdList["ARCBARDUR"] = function(msg)
   local any = false
   for bn, t in pairs(BD.lastTrace) do
     any = true
-    print(("  bar %s: active=%s hasAuraInfo=%s cooldownID=%s trackedSpellID=%s showDuration=%s secret=%s"):format(
-      tostring(bn), tostring(t.active), tostring(t.hasAuraInfo),
+    -- hasTotemInfo was recorded but never printed; it is the field that says
+    -- whether a totem bar took the totem branch or fell through to a mirror
+    print(("  bar %s: active=%s hasAuraInfo=%s hasTotemInfo=%s cooldownID=%s trackedSpellID=%s showDuration=%s secret=%s"):format(
+      tostring(bn), tostring(t.active), tostring(t.hasAuraInfo), tostring(t.hasTotemInfo),
       tostring(t.cooldownID), tostring(t.trackedSpellID), tostring(t.showDuration), tostring(t.secret)))
   end
   if not any then print("  (no duration-bar updates traced yet -- is the bar active/shown?)") end

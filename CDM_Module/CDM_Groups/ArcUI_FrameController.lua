@@ -27,6 +27,12 @@ local Controller = ns.FrameController
 -- Dependencies
 local Shared = ns.CDMShared
 local Registry = ns.FrameRegistry
+local PlacementTrace = ns.CDMGroups.PlacementTrace
+local function TracePlacement(reason, data)
+    if PlacementTrace then
+        PlacementTrace.Record(reason, data)
+    end
+end
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- FRAME REBIND CALLBACK REGISTRY
@@ -65,6 +71,15 @@ local function DispatchFrameRebind(frame, oldCdID, newCdID)
     -- Synchronous dispatch — runs in same tick as CDM's SetCooldownID.
     -- Subscribers do their own targeted cleanup; failures in one
     -- subscriber don't affect others.
+    if ns.TraceTap then
+        ns.TraceTap("FC", string.format("REBIND cd %s -> %s (subs=%d)",
+            tostring(oldCdID), tostring(newCdID), #frameRebindSubscribers))
+    end
+    -- every rebind = CDM still moving frames: push the FrameActive resync
+    -- pulse back so it only sweeps once the shuffle goes quiet
+    if ns.FrameActive and ns.FrameActive.PokeResync then
+        ns.FrameActive.PokeResync("rebind")
+    end
     for i = 1, #frameRebindSubscribers do
         local cb = frameRebindSubscribers[i]
         if cb then cb(frame, oldCdID, newCdID) end
@@ -211,10 +226,13 @@ local function FcOnSetScale(self, scale)
     if self._cdmgSettingScale then return end
     if self._arcAuraID then return end
     if issecretvalue and issecretvalue(scale) then return end
-    
+
     local parent = self:GetParent()
-    local isManaged = (parent and parent._isCDMGContainer) or self._cdmgIsFreeIcon
-    
+    local isInContainer = parent and parent._isCDMGContainer
+    -- NO free-flag heal here (the 3.7.12 vanishing-icons lesson): clearing
+    -- _cdmgIsFreeIcon on a transient lookup failure disarmed the hide fight.
+    local isManaged = isInContainer or self._cdmgIsFreeIcon
+
     if isManaged and math.abs((scale or 1) - 1) > 0.01 then
         self._cdmgSettingScale = true
         self:SetScale(1)
@@ -227,15 +245,28 @@ local function FcOnSetSize(self, w, h)
     if self._cdmgSettingSize then return end
     if self._arcAuraID then return end
     if issecretvalue and (issecretvalue(w) or issecretvalue(h)) then return end
-    
+
     local parent = self:GetParent()
     local isInContainer = parent and parent._isCDMGContainer
     local isFreeIcon = self._cdmgIsFreeIcon
-    
-    if not isInContainer and not isFreeIcon then return end
-    
-    local targetW, targetH
     local cdID = self.cooldownID
+
+    -- STALE FREE-FLAG HEAL — IN-CONTAINER ONLY (the 3.7.12 vanishing-icons
+    -- lesson, mirror of Maintain's OnSetSize): in-container frames are
+    -- definitionally not free, safe to clear. A NOT-in-container frame must
+    -- NEVER be healed on a freeIcons lookup failure — CDM refresh waves make
+    -- that lookup fail transiently for LEGIT free icons, and clearing the
+    -- flag disarmed DeferredHideFight (free icons vanished at combat start
+    -- until reload). Lookup failure falls back to stored size, as 3.7.11.
+    if isFreeIcon and isInContainer then
+        self._cdmgIsFreeIcon = nil
+        self._cdmgFreeTargetSize = nil
+        isFreeIcon = false
+    end
+
+    if not isInContainer and not isFreeIcon then return end
+
+    local targetW, targetH
     
     if cdID and ns.CDMEnhance and ns.CDMEnhance.GetEffectiveIconSettings then
         local cfg = ns.CDMEnhance.GetEffectiveIconSettings(cdID)
@@ -268,6 +299,11 @@ local function FcOnSetSize(self, w, h)
         end
     end
     
+    -- CORRUPTION GUARD: never stamp a nonsensical size (nil/NaN/absurd) —
+    -- skipping the correction is strictly safer than enforcing garbage.
+    if not (targetW and targetW == targetW and targetW > 0 and targetW <= 512) then return end
+    if not (targetH and targetH == targetH and targetH > 0 and targetH <= 512) then return end
+
     if math.abs((w or 0) - targetW) > 0.5 or math.abs((h or 0) - targetH) > 0.5 then
         self._cdmgSettingSize = true
         self:SetSize(targetW, targetH)
@@ -636,6 +672,13 @@ local function AssignFrameToGroup(cdID, frame, groupName, row, col, viewerType, 
         Debug("AssignFrameToGroup: Group", groupName, "not found for cdID", cdID)
         return false
     end
+    TracePlacement("FrameController.AssignFrameToGroup", {
+        id = cdID,
+        group = groupName,
+        row = row,
+        col = col,
+        viewerType = viewerType,
+    })
     
     -- CRITICAL: Detect if this was a placeholder becoming real
     -- If so, we need to restore all icons to their saved positions first
@@ -704,14 +747,126 @@ local function AssignFrameToGroup(cdID, frame, groupName, row, col, viewerType, 
     -- the mess, so the original icon "moved and never came back".)
     local function ResolveTargetCell(r, c)
         if not group.grid or r == nil or c == nil then return r, c end
+        -- SAVED CELL BEYOND THE GRID (shrink-while-hidden): the user resized
+        -- the group while this member was unloaded; its persisted home no
+        -- longer exists. Grow the grid back to reach it -- the icon returns
+        -- to its exact saved slot and the group to its pre-shrink shape --
+        -- instead of clamping onto an occupied cell (stacked icons) or
+        -- silently relocating. Distinct from collision expansion, which
+        -- assignment is still forbidden from doing.
+        if group.EnsureCellCapacity
+           and group.layout
+           and (r >= (group.layout.gridRows or 1) or c >= (group.layout.gridCols or 1)) then
+            -- AUTO-REFLOW GROUPS: the configured grid is AUTHORITATIVE (the
+            -- "Utility grows 3->6 columns on reload" regression, Discord
+            -- 1542106243676639362). The CDMGroups restore paths already hold
+            -- this rule, but this newer path still grew the grid for a stale
+            -- out-of-bounds saved home on every login - and the grown value
+            -- then persisted. Reflow decides the visual order anyway, so
+            -- fold the icon into a free in-bounds cell; the grow-back below
+            -- stays for STATIC groups (the shrink-while-hidden feature) and
+            -- as the last resort when every configured cell is held.
+            if group.autoReflow and group.FindNextFreeSlot then
+                local fr, fc = group:FindNextFreeSlot(false, true)
+                if fr ~= nil and fc ~= nil then
+                    TracePlacement("FrameController.ResolveTargetCell.foldOutOfBounds", {
+                        id = cdID, group = groupName, row = r, col = c,
+                        newRow = fr, newCol = fc,
+                    })
+                    return fr, fc
+                end
+            end
+            group:EnsureCellCapacity(r, c)
+            return r, c   -- the freshly created cell is necessarily free
+        end
         local occupant = group.grid[r] and group.grid[r][c]
         if not occupant or occupant == cdID then return r, c end
         local occMember = group.members[occupant]
         if not (occMember and occMember.frame and occMember.frame.cooldownID == occupant) then
             return r, c  -- stale grid entry, safe to take over
         end
+        -- SAVED-HOME PRIORITY, SYMMETRIC (placement-trace-proven login race,
+        -- 2026-08-26): dynamic reflow compacts members into cells that are
+        -- OTHER members' saved homes before every member has arrived
+        -- (Strikes capture: 11880's saved home is col 2, reflow parked it in
+        -- col 1; arc_spell_187874 then arrived for its saved col 1 and the
+        -- yield below displaced the RIGHTFUL OWNER). AddMemberAtWithFrame's
+        -- priority rule protects an owner from visitors; this is its mirror:
+        -- an icon restoring to its EXACT saved home outranks an occupant
+        -- whose own saved home is elsewhere. The squatter walks back to its
+        -- own saved cell when free, else to an adjacent free slot, else
+        -- overlaps transiently -- NOTHING is saved, matching this function's
+        -- contract. Killing the displacement at birth removes the
+        -- reflow-vs-grid oscillation it seeded and the yield pressure that
+        -- fed the grid-growth family (displaced members were how bad saved
+        -- cells got minted).
+        do
+            local savedAll = ns.CDMGroups.savedPositions
+            local mySaved = savedAll and savedAll[cdID]
+            if mySaved and mySaved.type == "group" and mySaved.target == groupName
+               and (mySaved.row or 0) == r and (mySaved.col or 0) == c then
+                local occSaved = savedAll and savedAll[occupant]
+                local occOwnsCell = occSaved and occSaved.type == "group"
+                    and occSaved.target == groupName
+                    and (occSaved.row or 0) == r and (occSaved.col or 0) == c
+                if not occOwnsCell then
+                    -- relocate the squatter: its own saved home first (when it
+                    -- is in this group, in bounds and free), else adjacent
+                    local nr, nc
+                    if occSaved and occSaved.type == "group" and occSaved.target == groupName then
+                        local hr, hc = occSaved.row or 0, occSaved.col or 0
+                        if hr < (group.layout and group.layout.gridRows or 1)
+                           and hc < (group.layout and group.layout.gridCols or 1) then
+                            local homeOcc = group.grid[hr] and group.grid[hr][hc]
+                            if not homeOcc or homeOcc == occupant then nr, nc = hr, hc end
+                        end
+                    end
+                    if nr == nil and group.FindAdjacentFreeSlot then
+                        nr, nc = group:FindAdjacentFreeSlot(r, c, false)
+                    end
+                    if nr ~= nil and nc ~= nil then
+                        if group.grid[r] and group.grid[r][c] == occupant then
+                            group.grid[r][c] = nil
+                        end
+                        group.grid[nr] = group.grid[nr] or {}
+                        group.grid[nr][nc] = occupant
+                        occMember.row, occMember.col = nr, nc
+                        TracePlacement("FrameController.AssignFrameToGroup.reclaimSavedHome", {
+                            id = cdID, group = groupName, row = r, col = c,
+                            squatter = occupant, squatterRow = nr, squatterCol = nc,
+                        })
+                    else
+                        -- nowhere for the squatter: transient overlap on the
+                        -- incomer's home; the restore/reflow passes resolve it
+                        TracePlacement("FrameController.AssignFrameToGroup.reclaimOverlap", {
+                            id = cdID, group = groupName, row = r, col = c,
+                            squatter = occupant,
+                        })
+                    end
+                    return r, c
+                end
+            end
+        end
+        TracePlacement("FrameController.AssignFrameToGroup.collision", {
+            id = cdID,
+            group = groupName,
+            row = r,
+            col = c,
+            occupant = occupant,
+        })
         if group.FindAdjacentFreeSlot then
-            local fr, fc = group:FindAdjacentFreeSlot(r, c, true)
+            -- allowExpand = FALSE (coltrace-proven login ratchet): with TRUE,
+            -- a restore-race collision between two VALID members grew
+            -- layout.gridCols right here (FindAdjacentFreeSlot phase 3,
+            -- CDMGroups ~8264) and the grown value was then serialized by any
+            -- later save -- "Group1 gains a column every login". ASSIGNMENT
+            -- must never change the user's grid geometry: find a free slot in
+            -- the EXISTING grid, else fall through to a temporary overlap,
+            -- which the restore/reflow passes resolve -- exactly this
+            -- function's contract ("nothing is saved... the next restore puts
+            -- everyone back"). Expansion stays for USER actions (drag/insert
+            -- call FindAdjacentFreeSlot with their own allowExpand).
+            local fr, fc = group:FindAdjacentFreeSlot(r, c, false)
             if fr and fc then return fr, fc end
         end
         return r, c  -- grid completely full: overlap (previous behavior)
@@ -912,6 +1067,12 @@ local function AssignFrameToGroup(cdID, frame, groupName, row, col, viewerType, 
     
     state.stats.framesAssigned = state.stats.framesAssigned + 1
     Debug("AssignFrameToGroup:", cdID, "->", groupName, "[" .. (row or 0) .. "," .. (col or 0) .. "]")
+    TracePlacement("FrameController.AssignFrameToGroup.complete", {
+        id = cdID,
+        group = groupName,
+        row = member.row,
+        col = member.col,
+    })
     return true
 end
 AssignFrameToGroup = (Track and Track("FC.AssignFrameToGroup", AssignFrameToGroup)) or AssignFrameToGroup
@@ -1075,6 +1236,12 @@ local function AssignFrameToOwner(cdID, cdmData)
     
     -- Check savedPositions for existing assignment
     local saved = ns.CDMGroups.savedPositions and ns.CDMGroups.savedPositions[cdID]
+    TracePlacement("FrameController.AssignFrameToOwner", {
+        id = cdID,
+        viewerType = viewerType,
+        defaultGroup = defaultGroup,
+        hasSavedPosition = saved ~= nil,
+    })
     
     if saved then
         if saved.type == "group" and saved.target then
@@ -1092,8 +1259,69 @@ local function AssignFrameToOwner(cdID, cdmData)
                 end
             end
             
-            return AssignFrameToGroup(cdID, frame, saved.target, targetRow, targetCol, viewerType, viewerName)
+            -- DEAD TARGET GUARD (3.8.0.c): the saved group may no longer exist --
+            -- deleting a group leaves savedPositions still pointing at it, and
+            -- this branch used to return REGARDLESS, so assignment dead-ended:
+            -- the icon landed in no group, not free, still parented to the
+            -- Blizzard viewer, yet fully styled = a normal-looking icon that
+            -- cannot be dragged, with no error. Proven live (`/afi orphans`):
+            -- two positions still targeting a deleted group "FWF".
+            --
+            -- CRITICAL: a missing group is NOT proof the group is gone. During
+            -- spec change / profile load the groups table is legitimately empty
+            -- for a window, and relocating icons then would scatter a correct
+            -- layout. So while ANY protection window is open we do nothing and
+            -- let the next pass retry; only outside one do we treat the target
+            -- as genuinely dead and fall through to routing.
+            -- We never DELETE the saved entry here either -- a lookup miss is a
+            -- transient signal, and clearing state on one is the code-red rule.
+            -- Deletion cleanup belongs in the delete path, where it is certain.
+            if not targetGroup then
+                local SM = ns.CDMGroups.StateManager
+                local protected = (SM and SM.IsInAnyProtection and SM.IsInAnyProtection())
+                               or (ns.CDMGroups.IsRestoring and ns.CDMGroups.IsRestoring())
+                if protected then
+                    Debug("AssignFrameToOwner: target group", saved.target,
+                          "missing during a protection window - deferring", cdID)
+                    return false
+                end
+                -- THE SAFETY NET IS FREE POSITION. A saved position naming a group
+                -- that no longer exists means the group was deleted, so honour the
+                -- deletion: drop the dead reference and place the icon loose. It
+                -- must NOT fall through to New Icon Routing, which is for icons
+                -- that were never placed - this one was placed, its group is just
+                -- gone, and routing would silently drop it into a default group
+                -- the user never chose. Matches what the arc-icon restore path
+                -- already does for a dead target.
+                Debug("AssignFrameToOwner: saved target group", saved.target,
+                      "no longer exists - placing as free icon", cdID)
+                TracePlacement("FrameController.AssignFrameToOwner.deadTarget", {
+                    id = cdID,
+                    group = saved.target,
+                })
+                if ns.CDMGroups.savedPositions then
+                    ns.CDMGroups.savedPositions[cdID] = nil
+                end
+                local fx, fy = 0, 0
+                if ns.CDMGroups.NextFreeDropPosition then
+                    fx, fy = ns.CDMGroups.NextFreeDropPosition(nil)
+                end
+                return AssignFrameToFree(cdID, frame, fx, fy, saved.iconSize, viewerType, viewerName)
+            else
+                TracePlacement("FrameController.AssignFrameToOwner.savedGroup", {
+                    id = cdID,
+                    group = saved.target,
+                    row = targetRow,
+                    col = targetCol,
+                })
+                return AssignFrameToGroup(cdID, frame, saved.target, targetRow, targetCol, viewerType, viewerName)
+            end
         elseif saved.type == "free" then
+            TracePlacement("FrameController.AssignFrameToOwner.savedFree", {
+                id = cdID,
+                x = saved.x,
+                y = saved.y,
+            })
             return AssignFrameToFree(cdID, frame, saved.x, saved.y, saved.iconSize, viewerType, viewerName)
         end
     end
@@ -1139,6 +1367,11 @@ local function AssignFrameToOwner(cdID, cdmData)
         if importOverride and importOverride.type == "free" then
             -- Place as free icon during import mode
             Debug("AssignFrameToOwner: Import mode override - placing as free icon at", importOverride.x, importOverride.y)
+            TracePlacement("FrameController.AssignFrameToOwner.importFree", {
+                id = cdID,
+                x = importOverride.x,
+                y = importOverride.y,
+            })
             return AssignFrameToFree(cdID, frame, importOverride.x, importOverride.y, importOverride.iconSize, viewerType, viewerName)
         end
     end
@@ -1146,31 +1379,64 @@ local function AssignFrameToOwner(cdID, cdmData)
     -- Define base groups that should always exist
     local BASE_GROUPS = { "Essential", "Utility", "Buffs" }
     
-    -- Try to assign to default group first
-    if defaultGroup and ns.CDMGroups.groups then
-        -- If group doesn't exist but it's a base group, try to create it
-        if not ns.CDMGroups.groups[defaultGroup] then
-            for _, baseName in ipairs(BASE_GROUPS) do
-                if defaultGroup == baseName then
-                    -- Create the base group
-                    if ns.CDMGroups.CreateGroup then
-                        Debug("AssignFrameToOwner: Creating missing base group", defaultGroup)
-                        ns.CDMGroups.CreateGroup(defaultGroup)
-                    end
-                    break
-                end
+    -- Where does a brand-new icon go? The user's per-category routing decides,
+    -- and the shipped default is resolved by STABLE ID so a RENAMED default is
+    -- still its own destination. Looking the base group up by NAME here is what
+    -- rebuilt a fresh empty "Utility" every login once the user renamed theirs,
+    -- producing a duplicate that could not be selected or deleted.
+    if defaultGroup and ns.CDMGroups.ResolveNewIconDestination then
+        local kind, group, groupName = ns.CDMGroups.ResolveNewIconDestination(defaultGroup)
+
+        if kind == "none" then
+            Debug("AssignFrameToOwner: routing = none for", defaultGroup)
+            TracePlacement("FrameController.AssignFrameToOwner.routeNone", {
+                id = cdID,
+                defaultGroup = defaultGroup,
+            })
+            return false
+        elseif kind == "free" then
+            -- Screen CENTRE (offsets from UIParent centre), fanned out so a batch
+            -- stays readable. Must NOT use frame:GetCenter(): those are absolute
+            -- screen coordinates and land the icon off the top of the screen.
+            local fx, fy = 0, 0
+            if ns.CDMGroups.NextFreeDropPosition then
+                fx, fy = ns.CDMGroups.NextFreeDropPosition(nil)
             end
-        end
-        
-        -- Now try to add to the group
-        local group = ns.CDMGroups.groups[defaultGroup]
-        if group and group.AddMember then
-            local added = group:AddMember(cdID)
-            if added then
-                -- AddMember created the member, now assign the frame
+            Debug("AssignFrameToOwner: routing = free position for", defaultGroup)
+            TracePlacement("FrameController.AssignFrameToOwner.routeFree", {
+                id = cdID,
+                defaultGroup = defaultGroup,
+                x = fx,
+                y = fy,
+            })
+            return AssignFrameToFree(cdID, frame, fx, fy, nil, viewerType, viewerName)
+        elseif kind == "group" and group and group.AddMember then
+            if group:AddMember(cdID) then
                 local member = group.members[cdID]
                 if member then
-                    return AssignFrameToGroup(cdID, frame, defaultGroup, member.row, member.col, viewerType, viewerName)
+                    TracePlacement("FrameController.AssignFrameToOwner.routeGroup", {
+                        id = cdID,
+                        group = groupName,
+                        row = member.row,
+                        col = member.col,
+                    })
+                    return AssignFrameToGroup(cdID, frame, groupName, member.row, member.col, viewerType, viewerName)
+                end
+            end
+        elseif not kind then
+            -- Nothing to route to at all (fresh setup / every base group gone):
+            -- create the shipped group for this category, as before.
+            for _, baseName in ipairs(BASE_GROUPS) do
+                if defaultGroup == baseName and ns.CDMGroups.CreateGroup then
+                    Debug("AssignFrameToOwner: Creating missing base group", defaultGroup)
+                    local created = ns.CDMGroups.CreateGroup(defaultGroup)
+                    if created and created.AddMember and created:AddMember(cdID) then
+                        local member = created.members[cdID]
+                        if member then
+                            return AssignFrameToGroup(cdID, frame, defaultGroup, member.row, member.col, viewerType, viewerName)
+                        end
+                    end
+                    break
                 end
             end
         end
@@ -3596,7 +3862,19 @@ local function InstallCDMHooks()
         if CooldownViewerItemDataMixin.SetCooldownID then
             hooksecurefunc(CooldownViewerItemDataMixin, "SetCooldownID", function(itemFrame, cooldownID)
                 if not _cdmGroupsEnabled then return end
-                
+
+                -- HOOK-LEVEL id transition tracker (_arcFCSeenCdID: written here,
+                -- read only by the same-id gate below). _arcLastEnhancedCdID is
+                -- stamped by the DEFERRED enhance pass, so a two-wave refresh storm
+                -- cycling a frame A→B→A between enhance passes made the return to A
+                -- match the stale stamp and skip the rebind dispatch — subscribers
+                -- kept B's shadow state on A's icon (Bloodlust wearing Stormstrike's
+                -- READY face until a cast, 2026-08-29). Tracking the id per CALL
+                -- sees every transition in the chain. Captured before any gate so
+                -- transitions on momentarily-unmanaged frames still record.
+                local prevSeenCdID = itemFrame._arcFCSeenCdID
+                itemFrame._arcFCSeenCdID = cooldownID
+
                 -- CRITICAL: Check hidden-by-bar BEFORE container gate.
                 -- Hidden frames may be in standard CDM viewers, not our containers.
                 -- When options panel is OPEN, _arcHiddenByBar is nil (cleared by ShowAllHiddenByBarOverlays)
@@ -3669,8 +3947,11 @@ local function InstallCDMHooks()
                 local isFreeIcon = itemFrame._cdmgIsFreeIcon
                 if not isInContainer and not isFreeIcon then return end
                 
-                -- Check if cooldownID actually changed from what we last enhanced
-                local prevCdID = itemFrame._arcLastEnhancedCdID
+                -- Check if cooldownID actually changed. Prefer the hook-level
+                -- tracker (sees every SetCooldownID transition) over the deferred
+                -- enhance stamp (frozen across refresh storms — see the tracker
+                -- comment at the top of this hook).
+                local prevCdID = prevSeenCdID or itemFrame._arcLastEnhancedCdID
                 if prevCdID and prevCdID == cooldownID then return end  -- Same cdID, no reshuffle
                 
                 -- Frame got a NEW cooldownID - clear ALL stale caches immediately

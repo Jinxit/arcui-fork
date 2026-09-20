@@ -222,6 +222,110 @@ local TOURS = {
             text  = "The same green tile is here in Buffs/Debuffs.\n\nEnter a spell ID and it joins the aura catalog, so the buttons you already use will build a duration bar, a stack bar or a texture for auras the Cooldown Manager never sees.",
         },
     },
+
+    -- ═══════════════════════════════════════════════════════════════════════
+    -- LOOT PLANNER (the ArcLootPlanner twin): sims, plans, coin protection.
+    -- SHIPS WITH 3.8.7 (key = the toc base version, so the once-per-release
+    -- offer fires when the options panel opens). Callouts are auto-positioned
+    -- until hand placement lands: run "/arctour dev", drag each box, then
+    -- "/arctour dump" and paste the offsets in.
+    -- ═══════════════════════════════════════════════════════════════════════
+    -- TOUR KEY GATE: this key must equal the release's BASE version or the
+    -- once-per-release offer never fires (3.8.7 shipped it live; renamed to
+    -- 3.8.8 so fresh installs and updaters get the offer on this release)
+    ["3.8.8"] = {
+        label = "Loot Planner",
+        -- the twin goes dormant when the standalone Arc Loot Planner addon is
+        -- installed, and this tab is a stub then: no tour in that case
+        check = function()
+            return ns.GetBonusRollOptionsTable ~= nil and not ns.BonusRollDormant
+        end,
+        -- teardown for everything the steps switch on: the Overview's sample
+        -- values go away and the Adventure Guide closes again if WE opened it
+        cleanup = function()
+            local h = ns.BonusRollTour
+            if h then
+                if h.SetDemo then h.SetDemo(false) end
+                if h.CloseGuide then h.CloseGuide() end
+            end
+        end,
+        {
+            tab   = { "bonusroll" },
+            find  = "Enable the Loot Planner module",
+            unionPanel = true,
+            title = "Meet the Loot Planner",
+            text  = "Your Raidbots sims, in the game: every boss and item gets a real DPS value, bonus rolls get planned instead of guessed, and your coins get protected.\n\nEverything lives under this tab, and this switch is the master for all of it. It comes enabled; turn it off here if it is not for you.",
+        },
+        {
+            tab   = { "bonusroll", "sims" },
+            find  = "Show me how (screenshots)",
+            grow  = 1,
+            alsoFind = "Sim Import",
+            title = "Feed it your sims",
+            text  = "Run a Raidbots Droptimizer and paste it in, three steps, no extra tools. This button walks you through it with screenshots.\n\nIf you use the WoWUtils addon, import is one click instead. Sims are stored per spec.",
+        },
+        {
+            tab   = { "bonusroll", "overview" },
+            -- sample EVs while the tour is around, so a fresh install still
+            -- shows a populated list (cleared by the tour's cleanup)
+            pre   = function()
+                local h = ns.BonusRollTour
+                if h and h.SetDemo then h.SetDemo(true) end
+                return true
+            end,
+            find  = "Difficulty",
+            grow  = 1,
+            alsoFind = "Bonus Roll Overview",
+            title = "Plan your coins",
+            text  = "Every boss with its expected value per coin, the best coin highlighted, and expandable gear lists with drop chances.\n\nClick a boss's coin to plan it for the week. Mythic+ plans whole dungeons, and every coin you spend is recorded in History automatically.\n\nNo sim yet? The numbers on screen right now are samples.",
+        },
+        {
+            tab   = { "bonusroll", "dropsview" },
+            pre   = function()
+                local h = ns.BonusRollTour
+                if h and h.SetDemo then h.SetDemo(true) end
+                return true
+            end,
+            find  = "Difficulty",
+            grow  = 1,
+            alsoFind = "Drops Overview",
+            title = "And your drops",
+            text  = "The same pricing with no coin math: every boss and dungeon valued from your drops sim, with your Top 5 upgrades ranked in gold everywhere they appear.\n\nNo drops sim yet? These numbers are samples as well.",
+        },
+        {
+            tab   = { "bonusroll", "journal" },
+            -- show the real thing at normal lighting: the guide opens on a
+            -- boss's LOOT page (planned boss, else best coin EV, else the
+            -- first boss) and every mark the addon adds gets its own ring -
+            -- the guide itself is never dimmed. OpenGuide remembers whether
+            -- the journal was already open; cleanup closes only what the
+            -- tour opened.
+            pre   = function()
+                local h = ns.BonusRollTour
+                return h and h.OpenGuide and h.OpenGuide()
+            end,
+            delay = 0.6,    -- boss select + loot list are async on a cold
+                            -- journal: give the marks time to exist
+            -- ONE ring, on the info bar: ringing every coin and value line
+            -- read as clutter, so the bar anchors the step and the text
+            -- points at the rest
+            rings = function()
+                local h = ns.BonusRollTour
+                local strip = h and h.StripFrame and h.StripFrame()
+                return strip and { strip } or nil
+            end,
+            title = "It lives in the Adventure Guide",
+            text  = "The circled bar is the Loot Planner inside your guide: rolls available, planned bosses, and buttons that jump to its options or switch the module off.\n\nBelow it, every boss wears a coin with its roll value - click one right there to plan it - and the loot list carries value lines and owned check marks.\n\nEvery overlay has its switch on the Overlays tab, and need or greed roll windows get a value badge too.",
+        },
+        {
+            tab   = { "bonusroll", "protection" },
+            find  = "Enable bonus roll protection",
+            grow  = 1,
+            alsoFind = "Protection",
+            title = "Never waste a coin",
+            text  = "With a plan set, the roll button on every other boss gets a lock cover, and Pass is guarded on your planned bosses.\n\nOne click unlocks, always. The addon never rolls or passes for you.",
+        },
+    },
 }
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -356,6 +460,19 @@ local function BuildSpot()
     local a = ag:CreateAnimation("Alpha")
     a:SetFromAlpha(1); a:SetToAlpha(0.45); a:SetDuration(0.85)
     s._pulse = ag
+
+    -- secondary ring for alsoFind targets (the sub-tab chip). A child of the
+    -- main ring so every Hide path covers it; anchored in UIParent coords.
+    local e = CreateFrame("Frame", nil, s, "BackdropTemplate")
+    e:SetFrameLevel(11)
+    e:EnableMouse(false)
+    e:SetBackdrop({ edgeFile = WHITE, edgeSize = 2 })
+    e:SetBackdropBorderColor(ARC[1], ARC[2], ARC[3], 1)
+    e.glow = e:CreateTexture(nil, "BACKGROUND")
+    e.glow:SetAllPoints()
+    e.glow:SetColorTexture(ARC[1], ARC[2], ARC[3], 0.10)
+    e:Hide()
+    s.extra = e
 
     s.dim = d
     d:Hide(); s:Hide()
@@ -517,7 +634,21 @@ local function BuildFrame()
     if not tContains(UISpecialFrames, "ArcUITourFrame") then
         tinsert(UISpecialFrames, "ArcUITourFrame")
     end
+    -- ANY exit is a FULL exit (code red, 2026-09-09): UISpecialFrames' ESC
+    -- hides only THIS frame — before this hook, the spotlight, dimmer, rings,
+    -- raised frames and the centred panel all stayed stranded on screen with
+    -- their only dismiss buttons gone, unrecoverable without a /reload. The
+    -- callout dying — ESC, a cinematic hiding UIParent, anything — now tears
+    -- the whole tour down. Stop() nils `steps` before it hides this frame,
+    -- so its own Hide re-enters here as a no-op.
+    -- ARMED AFTER the initial Hide below: a new frame is SHOWN by default,
+    -- so this creation-time Hide fires OnHide — hooked first, it stopped the
+    -- tour from inside its own first draw and the rest of that draw then
+    -- dereferenced the nil'd state (the 2026-09-09 line-1073 error).
     f:Hide()
+    f:SetScript("OnHide", function()
+        if steps then T.Stop(false) end
+    end)
     frame = f
     return f
 end
@@ -533,6 +664,7 @@ end
 -- next ApplyStatus is a harmless re-application of our own numbers.
 -- ═══════════════════════════════════════════════════════════════════════════
 local savedPanelPos
+local tourPanel    -- the exact panel frame object the running tour is bound to
 
 local function PanelFrame()
     local acd = LibStub and LibStub("AceConfigDialog-3.0", true)
@@ -630,6 +762,20 @@ local function RaiseTarget(f)
     f:SetFrameLevel(5)
 end
 
+-- Raise a LIST of frames (step.raise) above the dimmer WITHOUT making them
+-- part of the hole: the Loot Planner's guide step dims the whole Adventure
+-- Journal and lifts only the addon's own marks, so exactly OUR additions
+-- glow. Re-raising an already-raised frame is safe: LowerTarget restores in
+-- reverse, so the FIRST (true) record is applied last.
+local function RaiseList(list)
+    if type(list) ~= "table" then return end
+    for _i, fr in ipairs(list) do
+        if type(fr) == "table" and fr.SetFrameStrata and fr.IsShown and fr:IsShown() then
+            RaiseTarget(fr)
+        end
+    end
+end
+
 -- Click a control's own button so a dropdown shows its choices. Telling someone
 -- "you can pick a different scope here" lands far better with the list open in
 -- front of them than with a closed box. Best effort by design: if the widget has
@@ -686,6 +832,76 @@ local function ClampToPanel(r)
     local tt = math.min(r.b + r.h, panelRect.b + panelRect.h)
     if rr <= l or tt <= b then return r end
     return { l = l, b = b, w = rr - l, h = tt - b }
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- RINGS MODE (step.rings): no dimmer, no hole. The step names the frames an
+-- addon added to an otherwise untouched Blizzard window (the Loot Planner's
+-- Adventure Guide marks) and each one is encircled in place - the window
+-- keeps its normal lighting. A list entry is a frame/region, or an ARRAY of
+-- regions that share one ring (a coin and the value text under it).
+-- ═══════════════════════════════════════════════════════════════════════════
+local ringPool = {}
+
+local function HideRings()
+    for _i, r in ipairs(ringPool) do r._pulse:Stop(); r:Hide() end
+end
+
+local function GetRing(i)
+    local r = ringPool[i]
+    if not r then
+        r = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+        r:SetFrameStrata("TOOLTIP")
+        r:SetFrameLevel(12)
+        r:EnableMouse(false)
+        r:SetBackdrop({ edgeFile = WHITE, edgeSize = 2 })
+        r:SetBackdropBorderColor(ARC[1], ARC[2], ARC[3], 1)
+        local ag = r:CreateAnimationGroup()
+        ag:SetLooping("BOUNCE")
+        local a = ag:CreateAnimation("Alpha")
+        a:SetFromAlpha(1); a:SetToAlpha(0.45); a:SetDuration(0.85)
+        r._pulse = ag
+        ringPool[i] = r
+    end
+    return r
+end
+
+-- IsVisible, not IsShown: markers ride pooled Blizzard rows, and a hidden
+-- row's children still answer IsShown true from their stale position.
+local function VisibleRect(reg)
+    if type(reg) ~= "table" or not reg.GetLeft then return nil end
+    if reg.IsVisible and not reg:IsVisible() then return nil end
+    return RectOf(reg)
+end
+
+-- Circle every entry; returns the union of all rects (nil when none showed).
+local function ApplyRings(list, pad)
+    HideRings()
+    if type(list) ~= "table" then return nil end
+    local union
+    local n = 0
+    for _i, entry in ipairs(list) do
+        local rc
+        if type(entry) == "table" and entry.GetLeft then
+            rc = VisibleRect(entry)
+        elseif type(entry) == "table" then
+            for _j, reg in ipairs(entry) do
+                rc = UnionRect(rc, VisibleRect(reg))
+            end
+        end
+        if rc then
+            n = n + 1
+            local r = GetRing(n)
+            r:ClearAllPoints()
+            r:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", rc.l - pad, rc.b - pad)
+            r:SetSize(rc.w + pad * 2, rc.h + pad * 2)
+            r:SetAlpha(1)
+            r:Show()
+            r._pulse:Play()
+            union = UnionRect(union, rc)
+        end
+    end
+    return union
 end
 
 -- Does box (x,y,w,h) intersect rect r?
@@ -771,28 +987,41 @@ local function ShowStep()
     local step = steps and steps[index]
     if not step then T.Stop(true) return end
 
-    -- Open ONLY if it is not already open. OpenOptions restores the player's
-    -- saved position into the status table on every call, so calling it each
-    -- step dragged the panel straight back out of centre.
-    if not PanelFrame() and ns.API and ns.API.OpenOptions then ns.API.OpenOptions() end
+    -- NO REOPEN FALLBACK (the walls): T.Start guarantees the panel and the
+    -- panel closing kills the tour, so a missing panel here means a wall
+    -- already failed — a tour must DIE then, never resurrect the panel
+    -- (dragging the options window back onto someone's screen is exactly
+    -- the failure this system is walled against).
+    if not PanelFrame() then T.Stop(false) return end
     local acd = LibStub and LibStub("AceConfigDialog-3.0", true)
     if acd and step.tab then
         acd:SelectGroup("ArcUI", unpack(step.tab))
     end
 
     LowerTarget()   -- drop anything the previous step lifted
+    HideRings()     -- and any per-element rings it drew
 
     -- put the panel into the state this step describes (select a spell, etc)
     -- BEFORE the redraw below, so the controls it talks about actually exist
     if step.pre then step.pre() end
 
     -- one frame for AceConfig to rebuild the tab before we go looking in it
-    C_Timer.After(0.06, function()
+    -- (a step can ask for longer via `delay`, e.g. to wait out async data)
+    C_Timer.After(step.delay or 0.06, function()
         if not steps then return end          -- stopped while we waited
+        -- DRAW-TIME WALLS: the world may have changed during the wait.
+        -- Combat begun or panel gone = the tour dies before drawing one
+        -- pixel (the event/callback walls also fire, but this draw must
+        -- never depend on them having run first).
+        if InCombatLockdown() or not PanelFrame() then T.Stop(false) return end
         -- centre BEFORE measuring: every control rect below is relative to it
         CentrePanel()
         local f = BuildFrame()
         local s = BuildSpot()
+        -- re-check after the builders: anything in this callback that ends
+        -- the tour (a teardown hook firing on a creation-time Hide was the
+        -- 2026-09-09 case) must abort the draw, never run on nil'd state
+        if not steps then return end
 
         -- Three ways to pick a subject, in order of preference:
         --   frame = a real UI frame (the Ping Feed window)
@@ -815,6 +1044,7 @@ local function ShowStep()
                 end
             end
         end
+        if step.raise then RaiseList(step.raise()) end
         if not target and step.find then
             target = FindByLabel(step.find)
             -- open BEFORE growing: the button belongs to the control itself,
@@ -830,6 +1060,23 @@ local function ShowStep()
         -- unionPanel: light the control AND everything it governs. Ringing the
         -- Pings TAB alone says where to click but not what you get.
         if rect and step.unionPanel then rect = UnionRect(rect, panelRect) end
+        -- alsoFind: a SECONDARY highlight, deliberately not a bigger hole.
+        -- The classic use is the step's sub-tab chip: union-ing it into the
+        -- hole swallows the whole tab row (every chip shares that horizontal
+        -- band), so instead the named control is raised above the dimmer and
+        -- ringed on its own -- it lights up while its neighbours stay dark.
+        local extraRect
+        if step.alsoFind then
+            local extras = type(step.alsoFind) == "table" and step.alsoFind or { step.alsoFind }
+            for _i, lbl in ipairs(extras) do
+                local ef = FindByLabel(lbl)
+                local er = RectOf(ef)
+                if er then
+                    RaiseTarget(ef)
+                    extraRect = UnionRect(extraRect, er)
+                end
+            end
+        end
         rect = rect or panelRect or RectOf(PanelFrame())
         local pad = target and 4 or 0
 
@@ -863,6 +1110,25 @@ local function ShowStep()
         -- placement below, which measures GetHeight().
         f:SetHeight(math.max(150, TEXT_TOP + (f.body:GetStringHeight() or 0) + TEXT_BOTTOM))
 
+        -- rings mode replaces the whole spotlight: normal lighting, one ring
+        -- per addon-added element, callout placed beside the lot
+        if step.rings then
+            local union = ApplyRings(step.rings(), 3)
+            s._pulse:Stop(); s:Hide(); s.dim:Hide()
+            PlaceCallout(union, union ~= nil)
+            f:Show(); f:Raise()
+            lastRect = union or lastRect
+            -- async content (the guide's loot list) fills in late: one more
+            -- collection pass once it has had time to land
+            local me = step
+            C_Timer.After(0.5, function()
+                if steps and steps[index] == me then
+                    lastRect = ApplyRings(me.rings(), 3) or lastRect
+                end
+            end)
+            return
+        end
+
         if not rect then                       -- panel not open yet; text only
             s._pulse:Stop(); s:Hide(); s.dim:Hide()
             PlaceCallout(nil, false)
@@ -875,12 +1141,23 @@ local function ShowStep()
         local from = lastRect
         s._pulse:Stop()
         s:SetAlpha(1)
+        s.extra:Hide()                    -- re-shown on arrival if this step has one
         s.dim:Show(); s:Show()
         f:Show(); f:Raise()
 
         Glide(from, rect, pad, function()
             if not steps then return end
             s._pulse:Play()
+            -- second raise pass at arrival: async lists (the guide's loot)
+            -- may have grown new marks since the first collection
+            if step.raise then RaiseList(step.raise()) end
+            if extraRect then
+                local ep = 3
+                s.extra:ClearAllPoints()
+                s.extra:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", extraRect.l - ep, extraRect.b - ep)
+                s.extra:SetSize(extraRect.w + ep * 2, extraRect.h + ep * 2)
+                s.extra:Show()
+            end
         end)
         PlaceCallout(rect, target ~= nil)
         lastRect = rect
@@ -897,7 +1174,9 @@ function T.Next()
         local nextKey = steps.chain
         if nextKey and TOURS[nextKey] then
             local finished = running
+            local cl = steps.cleanup     -- run the OLD tour's cleanup once handed off
             if T.Start(nextKey) then
+                if cl then cl() end
                 local db = GetDB()
                 if db and finished then db.seen[finished] = true end
                 return
@@ -915,8 +1194,10 @@ end
 function T.SkipToChain()
     if not steps then return end
     local nextKey, finished = steps.chain, running
+    local cl = steps.cleanup             -- run the OLD tour's cleanup once handed off
     if not (nextKey and TOURS[nextKey]) then T.Stop(true) return end
     if T.Start(nextKey) then
+        if cl then cl() end
         local db = GetDB()
         if db and finished then db.seen[finished] = true end
     else
@@ -933,12 +1214,16 @@ end
 -- markSeen=false is used by the "replay" path so testing never burns the flag
 function T.Stop(markSeen)
     local ver = running
+    local cl = steps and steps.cleanup   -- the tour's own teardown (demo modes etc)
     steps, index, running, lastRect, panelRect = nil, 0, nil, nil, nil
+    tourPanel = nil                      -- unbind from the panel frame
     tweener:SetScript("OnUpdate", nil)     -- kill an in-flight glide
     LowerTarget()
+    HideRings()
     if frame then frame:Hide() end
     if spot then spot._pulse:Stop(); spot:Hide(); spot.dim:Hide() end
     RestorePanel()
+    if cl then cl() end
     if markSeen and ver then
         local db = GetDB()
         if db then db.seen[ver] = true end
@@ -957,7 +1242,7 @@ local function UsableSteps(list)
         if not s.check or s.check() then usable[#usable + 1] = s end
     end
     if #usable == 0 then return nil end
-    usable.chain, usable.label = list.chain, list.label
+    usable.chain, usable.label, usable.cleanup = list.chain, list.label, list.cleanup
     return usable
 end
 
@@ -976,7 +1261,41 @@ local function FirstRunnable(version)
     return nil, nil
 end
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- THE WALLS (Arc's contract, 2026-09-09, after the tour fired inside a key):
+-- a tour NEVER exists in combat, NEVER without the options panel on screen,
+-- and runs only when explicitly asked. Start is the ONE chokepoint every
+-- entry path funnels through (offer yes-click, the What's New button, the
+-- slash command, chain handoffs), and the walls repeat at runtime: combat
+-- start kills a running tour, the panel closing kills it, ESC kills it —
+-- each wall independent of the others, so no single failure re-opens this.
+-- ═══════════════════════════════════════════════════════════════════════════
 function T.Start(version)
+    if InCombatLockdown() then
+        print("|cff00ccffArcUI|r: the tour can't run in combat. Ask again afterwards with /arctour.")
+        return false
+    end
+    local gdb = GetDB()
+    if gdb and gdb.disabled then return false end     -- /arctour off: dead switch
+    -- the tour lives INSIDE the options panel: open it first, and refuse to
+    -- exist at all if it is not actually open — never a spotlight over the
+    -- open world
+    if not PanelFrame() and ns.API and ns.API.OpenOptions then ns.API.OpenOptions() end
+    local panel = PanelFrame()
+    if not panel then return false end
+    -- HARD TIE to the panel frame's own lifetime, independent of the
+    -- CDMShared close callback: this exact frame object hiding FOR ANY
+    -- REASON kills the tour. AceGUI recycles dialog frames through a shared
+    -- pool, so the hook is per-object-once and the handler checks it is
+    -- still OUR bound panel before acting (a pooled frame serving some
+    -- other dialog later must not kill an unrelated tour).
+    tourPanel = panel
+    if not panel._arcTourHideHooked then
+        panel._arcTourHideHooked = true
+        panel:HookScript("OnHide", function(self)
+            if steps and self == tourPanel then T.Stop(false) end
+        end)
+    end
     version = version or BaseVersion()
     local key, usable = FirstRunnable(version)
     if not usable then return false end
@@ -1010,6 +1329,15 @@ local function MarkOffered(version)
 end
 
 function T.OfferIfNew()
+    -- FIRE-TIME WALLS: the caller defers this (the panel needs a frame to
+    -- draw), so every precondition is re-checked HERE, not where it was
+    -- scheduled. In combat or with the panel already gone the offer simply
+    -- does not appear — and is NOT marked offered, so it returns on the
+    -- next peaceful panel open. Only an actual answer burns the flag.
+    if InCombatLockdown() then return false end
+    if not PanelFrame() then return false end
+    local db = GetDB()
+    if db and db.disabled then return false end       -- /arctour off
     local ver = BaseVersion()
     if not T.HasTour(ver) then return false end
     if T.Seen(ver) or T.Offered(ver) then return false end
@@ -1019,6 +1347,7 @@ function T.OfferIfNew()
         local f = CreateFrame("Frame", "ArcUITourOffer", UIParent, "BackdropTemplate")
         f:SetSize(360, 132)
         f:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
+        f:SetClampedToScreen(true)
         -- TOOLTIP: the options window is FULLSCREEN_DIALOG, and this asks its
         -- question ON TOP of it (same reason the changelog uses TOOLTIP)
         f:SetFrameStrata("TOOLTIP")
@@ -1060,11 +1389,32 @@ function T.OfferIfNew()
             f:Hide()
         end)
 
+        -- ESC must close the question too (an unanswered popup with no ESC
+        -- path is its own failure mode). ESC is not an answer, so the flag
+        -- is untouched and the ask returns on the next peaceful panel open.
+        if not tContains(UISpecialFrames, "ArcUITourOffer") then
+            tinsert(UISpecialFrames, "ArcUITourOffer")
+        end
+
         offerFrame = f
     end
 
     offerFrame.title:SetText("New in " .. (C_AddOns and C_AddOns.GetAddOnMetadata
         and C_AddOns.GetAddOnMetadata(ADDON, "Version") or ver))
+    -- Anchor to the CENTER OF THE OPTIONS PANEL, wherever the player has it
+    -- right now (the ask only ever fires because the panel was just opened).
+    -- Re-anchored on every show: the panel moves between opens. Falls back to
+    -- screen-center if the ACD frame can't be resolved.
+    local panel
+    local acd = LibStub and LibStub("AceConfigDialog-3.0", true)
+    local open = acd and acd.OpenFrames and acd.OpenFrames["ArcUI"]
+    if open and open.frame and open.frame:IsShown() then panel = open.frame end
+    offerFrame:ClearAllPoints()
+    if panel then
+        offerFrame:SetPoint("CENTER", panel, "CENTER", 0, 0)
+    else
+        offerFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 160)
+    end
     offerFrame:Show()
     return true
 end
@@ -1145,6 +1495,38 @@ local function SelfCheck(version)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
+-- RUNTIME WALLS (code red, 2026-09-09): the walls in T.Start gate ENTRY;
+-- these two enforce the same law for the tour's whole LIFETIME.
+--   * combat starting = instant full teardown of the tour AND the offer.
+--     Neither is marked seen/offered: both may return in peacetime, but
+--     nothing of ours exists on a combat screen. No exceptions.
+--   * the options panel closing = the same teardown. The tour has no
+--     meaning outside the panel; it must never outlive it.
+-- Panel binding registers at PLAYER_LOGIN because CDMShared loads after
+-- this file.
+-- ═══════════════════════════════════════════════════════════════════════════
+local walls = CreateFrame("Frame")
+walls:RegisterEvent("PLAYER_REGEN_DISABLED")
+walls:RegisterEvent("PLAYER_LOGIN")
+walls:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_REGEN_DISABLED" then
+        if steps then T.Stop(false) end
+        if offerFrame and offerFrame:IsShown() then offerFrame:Hide() end
+        return
+    end
+    -- PLAYER_LOGIN: bind the tour's lifetime to the options panel
+    walls:UnregisterEvent("PLAYER_LOGIN")
+    if ns.CDMShared and ns.CDMShared.RegisterPanelCallback then
+        ns.CDMShared.RegisterPanelCallback("ArcTour", {
+            onClose = function()
+                if steps then T.Stop(false) end
+                if offerFrame and offerFrame:IsShown() then offerFrame:Hide() end
+            end,
+        })
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
 -- slash
 -- ═══════════════════════════════════════════════════════════════════════════
 SLASH_ARCTOUR1 = "/arctour"
@@ -1157,6 +1539,31 @@ SlashCmdList["ARCTOUR"] = function(msg)
         local db = GetDB()
         if db then wipe(db.seen) end
         print("|cff00ccffArcUI|r: tour reset. The What's New window will offer it again.")
+        return
+    end
+
+    -- the panic button: full teardown of everything the tour system can put
+    -- on screen, safe to run any time, running tour or not
+    if cmd == "stop" then
+        local was = steps ~= nil
+        T.Stop(false)
+        if offerFrame then offerFrame:Hide() end
+        print(was and "|cff00ccffArcUI|r: tour stopped, everything cleared."
+                  or  "|cff00ccffArcUI|r: no tour running; overlays cleared anyway.")
+        return
+    end
+
+    -- the dead switch: nothing offers, nothing starts, until turned back on
+    if cmd == "off" or cmd == "on" then
+        local db = GetDB()
+        if db then db.disabled = (cmd == "off") or nil end
+        if cmd == "off" then
+            T.Stop(false)
+            if offerFrame then offerFrame:Hide() end
+            print("|cff00ccffArcUI|r: tours disabled. Nothing will offer or start a tour until /arctour on.")
+        else
+            print("|cff00ccffArcUI|r: tours enabled again.")
+        end
         return
     end
 
@@ -1212,7 +1619,7 @@ SlashCmdList["ARCTOUR"] = function(msg)
         local a = Authored()
         print(("|cff00ccffArcUI|r: tours authored for %s. This build is %s.")
             :format(#a > 0 and table.concat(a, ", ") or "nothing", BaseVersion()))
-        print("  |cff8298b4/arctour|r run  |cff8298b4check|r verify anchors  |cff8298b4reset|r re-offer the tour")
+        print("  |cff8298b4/arctour|r run  |cff8298b4stop|r clear everything  |cff8298b4off|r/|cff8298b4on|r kill switch  |cff8298b4check|r verify anchors  |cff8298b4reset|r re-offer")
 --[==[@debug@
         print("  |cff8298b4dev|r place boxes by hand  |cff8298b4dump|r print them  |cff8298b4clear|r discard them")
 --@end-debug@]==]

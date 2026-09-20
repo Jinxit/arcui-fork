@@ -58,7 +58,27 @@ end
 ArcAurasCooldown.initialized = false
 ArcAurasCooldown.spellFrames = {}   -- arcID -> frame
 ArcAurasCooldown.spellData   = {}   -- arcID -> frameData (engine state)
-ArcAurasCooldown.spellsByID  = {}   -- spellID -> arcID (reverse lookup for events)
+-- MULTI-MAP (2026-08-30, spell copies): spellID -> { [arcID]=true, ... }.
+-- One spell can drive several icon copies (arc_spell_X, arc_spell_X#2, ...);
+-- every event dispatch iterates the set. Same shape as ArcAurasTimer.spellsByID.
+ArcAurasCooldown.spellsByID  = {}
+
+function ArcAurasCooldown.IndexSpellArcID(spellID, arcID)
+    if not spellID or not arcID then return end
+    local set = ArcAurasCooldown.spellsByID[spellID]
+    if not set then
+        set = {}
+        ArcAurasCooldown.spellsByID[spellID] = set
+    end
+    set[arcID] = true
+end
+
+function ArcAurasCooldown.UnindexSpellArcID(spellID, arcID)
+    local set = spellID and ArcAurasCooldown.spellsByID[spellID]
+    if not set then return end
+    set[arcID] = nil
+    if next(set) == nil then ArcAurasCooldown.spellsByID[spellID] = nil end
+end
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- USABILITY COLORS (matches CDM's CooldownViewerConstants)
@@ -159,15 +179,85 @@ local function EffectiveSID(spellID)
 end
 ArcAurasCooldown.EffectiveSID = EffectiveSID
 
--- Reverse map: live override id -> arcID. Built lazily whenever a feed sees an
--- override form, so event handlers (cast success, proc glows) that receive the
--- OVERRIDE id can find the tracked base icon. Stale entries are harmless (a
--- gone override's id can no longer fire events).
+-- PER-ICON OPT-OUT ("Ignore Spell Overrides"): report the BASE spell for every
+-- override-aware read on this icon -- cooldown, icon art and proc glows all go
+-- through here -- so the icon behaves the way it did before override-following
+-- existed: whatever cooldown the base spell has, and its own art. Default off,
+-- so every existing icon keeps following overrides.
+local function EffectiveSIDFor(fd)
+    local sid = fd and fd.spellID
+    if not sid then return sid end
+    local db = GetDB()
+    local cfg = db and db.trackedSpells and db.trackedSpells[fd.arcID]
+    if cfg and cfg.ignoreSpellOverride then return sid end
+    return EffectiveSID(sid)
+end
+ArcAurasCooldown.EffectiveSIDFor = EffectiveSIDFor
+
+-- Reverse map: live override id -> { [arcID]=true }. Built lazily whenever a
+-- feed sees an override form, so event handlers (cast success, proc glows)
+-- that receive the OVERRIDE id can find the tracked base icon(s). Stale
+-- entries are harmless (a gone override's id can no longer fire events).
+-- Multi-map since spell copies (2026-08-30) — every copy indexes itself.
 ArcAurasCooldown.overrideToArc = ArcAurasCooldown.overrideToArc or {}
 
-local function FindArcIDForSpell(sid)
+local function IndexOverrideArcID(sid, arcID)
+    if not sid or not arcID then return end
+    local set = ArcAurasCooldown.overrideToArc[sid]
+    if not set then
+        set = {}
+        ArcAurasCooldown.overrideToArc[sid] = set
+    end
+    set[arcID] = true
+end
+
+-- Run fn(fd) for every arc icon tracking this spell id — base-keyed copies
+-- first, then override-resolved ones (deduped). Replaces the single-valued
+-- FindArcIDForSpell: with copies, ONE spell drives SEVERAL icons.
+local function ForEachFDForSpell(sid, fn)
+    if not sid then return end
+    local seen
+    local set = ArcAurasCooldown.spellsByID[sid]
+    if set then
+        for arcID in pairs(set) do
+            local fd = ArcAurasCooldown.spellData[arcID]
+            if fd then
+                seen = seen or {}
+                seen[arcID] = true
+                fn(fd)
+            end
+        end
+    end
+    local oset = ArcAurasCooldown.overrideToArc[sid]
+    if oset then
+        for arcID in pairs(oset) do
+            if not (seen and seen[arcID]) then
+                local fd = ArcAurasCooldown.spellData[arcID]
+                if fd then fn(fd) end
+            end
+        end
+    end
+end
+
+-- First fd for a spell id (any copy — they all read the SAME spell's cooldown,
+-- so state-only fallbacks don't care which one they get).
+local function AnyFDForSpell(sid)
     if not sid then return nil end
-    return ArcAurasCooldown.spellsByID[sid] or ArcAurasCooldown.overrideToArc[sid]
+    local set = ArcAurasCooldown.spellsByID[sid]
+    if set then
+        for arcID in pairs(set) do
+            local fd = ArcAurasCooldown.spellData[arcID]
+            if fd then return fd end
+        end
+    end
+    local oset = ArcAurasCooldown.overrideToArc[sid]
+    if oset then
+        for arcID in pairs(oset) do
+            local fd = ArcAurasCooldown.spellData[arcID]
+            if fd then return fd end
+        end
+    end
+    return nil
 end
 
 -- Keep the icon ART in sync with the live override form. Change-detected on
@@ -182,6 +272,13 @@ local function UpdateOverrideIcon(fd, effectiveSID)
         and ns.CDMEnhance.GetIconSettings(frame.cooldownID)
     if cfg and cfg.customIconID and cfg.customIconID ~= 0 and cfg.customIconID ~= "" then
         return  -- user picked a custom icon: leave it alone
+    end
+    -- ...and the ARC-side override, which lives in a different store. This
+    -- only checked the CDM one, so an Arc icon override was stomped by the
+    -- spell's own art the next time the override form flipped.
+    if ArcAuras and ArcAuras.GetIconOverride
+        and ArcAuras.GetIconOverride(frame._arcAuraID) then
+        return
     end
     fd._arcDisplayedSID = effectiveSID
     local iconTex = frame.Icon or frame.icon
@@ -232,7 +329,32 @@ local function EnsureShadowFrames(fd)
         return w
     end
     if not fd._arcShadowCD     then fd._arcShadowCD     = makeShadow() end
-    if not fd._arcShadowCharge then fd._arcShadowCharge = makeShadow() end
+    if not fd._arcShadowCharge then
+        local w = makeShadow()
+        fd._arcShadowCharge = w
+        -- CHARGE GAINED sound (2026-08-30): each completion of the charge
+        -- shadow's cooldown is one charge returning. Deferred so the engine
+        -- has re-fed the NEXT charge first: still recharging = intermediate
+        -- charge (play); landed full = final charge — the READY transition
+        -- alert in _ASV covers that instead.
+        w:HookScript("OnCooldownDone", function()
+            C_Timer.After(0.1, function()
+                if fd.isCustomTimer or fd.isCustomTotem then return end
+                local settings = ArcAuras.GetCachedSettings and ArcAuras.GetCachedSettings(fd.arcID)
+                local ca = settings and settings.cooldownAlerts
+                if not ca then return end
+                local CAA = ns.CDMAuraAlerts
+                if not (CAA and CAA.QueueCooldownAlert) then return end
+                local m = fd._arcShadowCD and fd._arcShadowCD:IsShown() or false
+                local c = fd._arcShadowCharge and fd._arcShadowCharge:IsShown() or false
+                if (not m) and c then
+                    local s, x = CAA.ResolveAlertPair(ca, "charge")
+                    CAA.QueueCooldownAlert("arc|" .. tostring(fd.arcID) .. "#charge",
+                        s, x, ca.channel, nil)
+                end
+            end)
+        end)
+    end
 end
 
 -- Feed both shadows with ignoreGCD=true durObjs. Zero-span durObj = widget
@@ -243,8 +365,8 @@ local function FeedShadows(fd)
 
     -- Read the cooldown off the LIVE form (override-aware): the cooldown lives
     -- on the override spell for proc/replacement/transform spells.
-    local sid = EffectiveSID(fd.spellID)
-    if sid ~= fd.spellID then ArcAurasCooldown.overrideToArc[sid] = fd.arcID end
+    local sid = EffectiveSIDFor(fd)
+    if sid ~= fd.spellID then IndexOverrideArcID(sid, fd.arcID) end
 
     if C_Spell.GetSpellCooldownDuration then
         local dur = C_Spell.GetSpellCooldownDuration(sid, true)
@@ -328,10 +450,7 @@ local function GetCooldownState(spellID, isChargeSpell, callerFd)
     -- can't decide which settings to use" bug on custom timers.
     local fd = callerFd
     if not fd then
-        local arcID = ArcAurasCooldown.spellsByID and ArcAurasCooldown.spellsByID[spellID]
-        if arcID and ArcAurasCooldown.spellData then
-            fd = ArcAurasCooldown.spellData[arcID]
-        end
+        fd = AnyFDForSpell(spellID)
     end
     if not fd then return false, false end
 
@@ -505,6 +624,65 @@ local _ASV = function(fd, isOnCD, passedSettings, passedIsRecharging)
     -- ═══════════════════════════════════════════════════════════════
     -- isRecharging passed from GetCooldownState (chargesInfo.isActive, non-secret, no GCD filter needed)
     local isRecharging = passedIsRecharging or false
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- COOLDOWN SOUND ALERTS (2026-08-30): Ready / On Cooldown fire on
+    -- 3-state TRANSITIONS (empty / recharging / full); Charge Gained
+    -- fires from the charge shadow's OnCooldownDone (EnsureShadowFrames).
+    -- Runs BEFORE the state-change early-return (transitions ARE changes,
+    -- but the baseline record must track every call). Timers/totems
+    -- excluded — their state buckets mean different things. Playback via
+    -- ns.CDMAuraAlerts.QueueCooldownAlert (0.15s live re-verify, so a
+    -- GCD-window transient never plays a wrong sound).
+    -- ═══════════════════════════════════════════════════════════════
+    if not fd.isCustomTimer and not fd.isCustomTotem then
+        local newS = (isOnCD and "empty") or (isRecharging and "recharging") or "full"
+        local prevS = fd._arcCDAlertState
+        fd._arcCDAlertState = newS
+        if prevS and prevS ~= newS then
+            if ns.TraceTap then
+                ns.TraceTap("CDA", string.format("arc transition %s->%s id=%s ca=%s",
+                    tostring(prevS), tostring(newS), tostring(arcID),
+                    tostring(settings and settings.cooldownAlerts ~= nil)))
+            end
+            local ca = settings and settings.cooldownAlerts
+            local CAA = ns.CDMAuraAlerts
+            if ca and CAA and CAA.QueueCooldownAlert then
+                local key = "arc|" .. tostring(arcID)
+                if newS == "full" then
+                    local s, x = CAA.ResolveAlertPair(ca, "ready")
+                    CAA.QueueCooldownAlert(key .. "#ready", s, x, ca.channel, function()
+                        local m = fd._arcShadowCD and fd._arcShadowCD:IsShown() or false
+                        local c = fd._arcShadowCharge and fd._arcShadowCharge:IsShown() or false
+                        return (not m) and (not c)
+                    end)
+                elseif newS == "empty" then
+                    local s, x = CAA.ResolveAlertPair(ca, "cooldown")
+                    CAA.QueueCooldownAlert(key .. "#oncd", s, x, ca.channel, function()
+                        return (fd._arcShadowCD and fd._arcShadowCD:IsShown()) == true
+                    end)
+                elseif newS == "recharging" and prevS == "full" then
+                    -- ON COOLDOWN (RECHARGING): charge spent, spell still castable
+                    local s, x = CAA.ResolveAlertPair(ca, "recharging")
+                    CAA.QueueCooldownAlert(key .. "#recharging", s, x, ca.channel, function()
+                        local m = fd._arcShadowCD and fd._arcShadowCD:IsShown() or false
+                        local c = fd._arcShadowCharge and fd._arcShadowCharge:IsShown() or false
+                        return (not m) and c
+                    end)
+                elseif newS == "recharging" and prevS == "empty" then
+                    -- CHARGE GAINED: first charge back from depleted (the shadow
+                    -- OnCooldownDone path is unreliable — re-feeds beat natural
+                    -- expiry; same queue key dedupes when both fire).
+                    local s, x = CAA.ResolveAlertPair(ca, "charge")
+                    CAA.QueueCooldownAlert(key .. "#charge", s, x, ca.channel, function()
+                        local m = fd._arcShadowCD and fd._arcShadowCD:IsShown() or false
+                        local c = fd._arcShadowCharge and fd._arcShadowCharge:IsShown() or false
+                        return (not m) and c
+                    end)
+                end
+            end
+        end
+    end
 
     -- Check if glow preview is active
     local isGlowPreview = ns.CDMEnhanceOptions and ns.CDMEnhanceOptions.IsGlowPreviewActive
@@ -856,6 +1034,8 @@ local _ASV = function(fd, isOnCD, passedSettings, passedIsRecharging)
                 intensity = (stateVisuals and stateVisuals.readyGlowIntensity) or rs.glowIntensity or 1.0,
                 xOffset = (stateVisuals and stateVisuals.readyGlowXOffset) or rs.glowXOffset or 0,
                 yOffset = (stateVisuals and stateVisuals.readyGlowYOffset) or rs.glowYOffset or 0,
+                translateX = (stateVisuals and stateVisuals.readyGlowTranslateX) or rs.glowTranslateX or 0,
+                translateY = (stateVisuals and stateVisuals.readyGlowTranslateY) or rs.glowTranslateY or 0,
                 strata = (stateVisuals and stateVisuals.readyGlowFrameStrata) or rs.glowFrameStrata,
                 frameLevel = (stateVisuals and stateVisuals.readyGlowFrameLevel) or rs.glowFrameLevel,
             })
@@ -902,6 +1082,9 @@ local _ASV = function(fd, isOnCD, passedSettings, passedIsRecharging)
                 ns.Glows.ForceHide(frame, "usable")
             end
             local gc = glowSu.usableGlowColor
+            -- glow-wiring pass 2026-08-29: offsets/strata/level were panel
+            -- knobs (shared settings with CDM icons, consumed there by
+            -- CDMSpellUsability.UpdateGlow) but DEAD on arc frames
             ns.Glows.Start(frame, "usable", glowType, {
                 color = gc,
                 lines = glowSu.usableGlowLines or 8,
@@ -909,6 +1092,10 @@ local _ASV = function(fd, isOnCD, passedSettings, passedIsRecharging)
                 thickness = glowSu.usableGlowThickness or 2,
                 particles = glowSu.usableGlowParticles or 4,
                 scale = glowSu.usableGlowScale or 1,
+                xOffset = glowSu.usableGlowXOffset or 0,
+                yOffset = glowSu.usableGlowYOffset or 0,
+                strata = (glowSu.usableGlowFrameStrata ~= "inherit") and glowSu.usableGlowFrameStrata or nil,
+                frameLevel = glowSu.usableGlowFrameLevel,
             })
             fd.usableGlowActive = true
             fd.usableGlowType = glowType
@@ -1002,8 +1189,8 @@ _FeedCooldownFn = function(fd)
     -- OVERRIDE-AWARE: every API read below queries the LIVE casting form.
     -- The cooldown for proc/replacement/transform spells lives on the
     -- override id; base-only reads left those icons stuck "never on CD".
-    local spellID = EffectiveSID(fd.spellID)
-    if spellID ~= fd.spellID then ArcAurasCooldown.overrideToArc[spellID] = fd.arcID end
+    local spellID = EffectiveSIDFor(fd)
+    if spellID ~= fd.spellID then IndexOverrideArcID(spellID, fd.arcID) end
     UpdateOverrideIcon(fd, spellID)
     local isChargeSpell = fd.isChargeSpell
 
@@ -1287,7 +1474,7 @@ UpdateProcGlow = function(fd, forceShow)
     if not fd or not fd.frame then return end
 
     -- Overlay procs fire for the OVERRIDE form (Voltaic Blaze, not Flame Shock)
-    local spellID = EffectiveSID(fd.spellID)
+    local spellID = EffectiveSIDFor(fd)
     local isOverlayed = forceShow
 
     -- When we weren't told the state (forceShow == nil), query it directly.
@@ -1336,6 +1523,9 @@ UpdateProcGlow = function(fd, forceShow)
                 gc = procCfg.color
             end
 
+            -- glow-wiring pass 2026-08-29: offsets/strata/level were panel
+            -- knobs (procGlow.* shared with CDM icons) but DEAD on arc frames
+            local procStrata = procCfg and procCfg.strata
             ns.Glows.Start(fd.frame, "proc", glowType, {
                 color = gc,
                 lines = procCfg and procCfg.lines or 8,
@@ -1343,6 +1533,10 @@ UpdateProcGlow = function(fd, forceShow)
                 thickness = procCfg and procCfg.thickness or 2,
                 particles = procCfg and procCfg.particles or 4,
                 scale = procCfg and procCfg.scale or 1,
+                xOffset = procCfg and procCfg.xOffset or 0,
+                yOffset = procCfg and procCfg.yOffset or 0,
+                strata = (procStrata ~= "inherit") and procStrata or nil,
+                frameLevel = procCfg and procCfg.frameLevel,
             })
             fd.procGlowActive = true
             fd.procGlowType = glowType
@@ -1463,7 +1657,7 @@ function ArcAurasCooldown.InitializeSpellFrame(arcID, frame, config)
     -- Register in all tables
     ArcAurasCooldown.spellFrames[arcID] = frame
     ArcAurasCooldown.spellData[arcID] = fd
-    ArcAurasCooldown.spellsByID[spellID] = arcID
+    ArcAurasCooldown.IndexSpellArcID(spellID, arcID)
 
     -- CDMEnhance registration (Masque registration already handled by ArcAuras.CreateFrame)
     ArcAuras.RegisterWithCDMEnhance(arcID, frame)
@@ -1564,124 +1758,26 @@ StaticPopupDialogs["ARCAURAS_CD_REMOVE_SPELL"] = {
 }
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- ICON OVERRIDE
--- Lets users change the displayed icon for any Arc Aura spell frame.
--- Accepts a spell ID or item ID; stores iconOverride in trackedSpells config.
+-- ICON OVERRIDE — see the ONE PATH block in ArcUI_ArcAuras.lua.
+-- The popup and picker that used to live here were a byte-identical copy of
+-- the ones there (only the prefill store differed), and the writer was a
+-- third copy of the same logic. All three now route to the shared versions.
 -- ═══════════════════════════════════════════════════════════════════════════
 
-StaticPopupDialogs["ARCAURAS_CD_ICON_OVERRIDE"] = {
-    text = "Enter a Spell ID or Item ID for the new icon:\n(Enter 0 or leave blank to reset to default)",
-    button1 = "Apply", button2 = "Cancel",
-    hasEditBox = true,
-    OnShow = function(self)
-        self.editBox:SetNumeric(true)
-        self.editBox:SetFocus()
-        -- Pre-fill with current override if any
-        local data = self.data
-        if data and data.currentOverrideID then
-            self.editBox:SetText(tostring(data.currentOverrideID))
-            self.editBox:HighlightText()
-        end
-    end,
-    OnAccept = function(self, data)
-        local inputID = tonumber(self.editBox:GetText())
-        if data and data.arcID then
-            ArcAurasCooldown.ApplyIconOverride(data.arcID, inputID)
-        end
-    end,
-    EditBoxOnEnterPressed = function(self)
-        local dialog = self:GetParent()
-        local inputID = tonumber(self:GetText())
-        local data = dialog.data
-        if data and data.arcID then
-            ArcAurasCooldown.ApplyIconOverride(data.arcID, inputID)
-        end
-        dialog:Hide()
-    end,
-    timeout = 0, whileDead = true, hideOnEscape = true,
-}
-
 function ArcAurasCooldown.ShowIconOverridePicker(arcID, frame)
-    local db = GetDB()
-    local config = db and db.trackedSpells and db.trackedSpells[arcID]
-    
-    local currentOverrideID = nil
-    if config and config.iconOverrideID then
-        currentOverrideID = config.iconOverrideID
-    end
-    
-    local dialog = StaticPopup_Show("ARCAURAS_CD_ICON_OVERRIDE")
-    if dialog then
-        dialog.data = {
-            arcID = arcID,
-            currentOverrideID = currentOverrideID,
-        }
-        if currentOverrideID and dialog.editBox then
-            dialog.editBox:SetText(tostring(currentOverrideID))
-            dialog.editBox:HighlightText()
-        end
+    if ArcAuras and ArcAuras.ShowIconOverridePicker then
+        return ArcAuras.ShowIconOverridePicker(arcID, frame)
     end
 end
 
+-- Public entry point kept for existing callers; the implementation is the
+-- shared writer in ArcUI_ArcAuras.lua (this was a near-duplicate of the item
+-- and timer versions and had already drifted from them).
 function ArcAurasCooldown.ApplyIconOverride(arcID, overrideID)
-    local db = GetDB()
-    if not db or not db.trackedSpells or not db.trackedSpells[arcID] then return end
-    
-    local config = db.trackedSpells[arcID]
-    
-    -- Reset if 0 or nil
-    if not overrideID or overrideID <= 0 then
-        config.iconOverride = nil
-        config.iconOverrideID = nil
-        -- Restore original icon
-        local name, originalIcon = GetSpellNameAndIcon(config.spellID)
-        config.icon = originalIcon or config.icon
-        
-        local frame = ArcAuras.frames and ArcAuras.frames[arcID]
-        if frame and frame.Icon then
-            frame.Icon:SetTexture(config.icon or 134400)
-        end
-        print("|cff00CCFF[Arc Auras]|r Icon reset to default for " .. (config.name or arcID))
-        return
+    if ArcAuras and ArcAuras.SetIconOverride then
+        return ArcAuras.SetIconOverride(arcID, overrideID)
     end
-    
-    -- Try as spell ID first, then item ID
-    local newIcon = nil
-    local sourceName = nil
-    
-    local spellInfo = C_Spell.GetSpellInfo(overrideID)
-    if spellInfo and (spellInfo.iconID or spellInfo.originalIconID) then
-        newIcon = spellInfo.iconID or spellInfo.originalIconID
-        sourceName = spellInfo.name
-    end
-    
-    if not newIcon then
-        -- Try as item ID
-        local itemIcon = C_Item.GetItemIconByID(overrideID)
-        if itemIcon then
-            newIcon = itemIcon
-            local itemName = C_Item.GetItemNameByID(overrideID)
-            sourceName = itemName or ("Item " .. overrideID)
-        end
-    end
-    
-    if not newIcon then
-        print("|cff00CCFF[Arc Auras]|r Could not find icon for ID " .. overrideID)
-        return
-    end
-    
-    -- Save override
-    config.iconOverride = newIcon
-    config.iconOverrideID = overrideID
-    
-    -- Apply immediately
-    local frame = ArcAuras.frames and ArcAuras.frames[arcID]
-    if frame and frame.Icon then
-        frame.Icon:SetTexture(newIcon)
-    end
-    
-    print(string.format("|cff00CCFF[Arc Auras]|r Icon changed to %s (%d) for %s",
-        sourceName or "?", overrideID, config.name or arcID))
+    return false
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -1750,23 +1846,57 @@ end
 -- TRACKED SPELL MANAGEMENT (PUBLIC API)
 -- ═══════════════════════════════════════════════════════════════════════════
 
-function ArcAurasCooldown.AddTrackedSpell(spellID)
+function ArcAurasCooldown.AddTrackedSpell(spellID, allowCopy)
     if not spellID or type(spellID) ~= "number" or spellID <= 0 then return false end
     local db = GetDB()
     if not db then return false end
 
     local arcID = ArcAuras.MakeSpellID(spellID)
-    if db.trackedSpells[arcID] then return true end -- already tracked
+    local copyIndex = 1
+    if db.trackedSpells[arcID] then
+        -- SPELL COPIES (2026-08-30): only an EXPLICIT user add (allowCopy, set
+        -- by the options Add flows) creates another icon of the same spell —
+        -- every copy is a full independent icon (own frame, own shadows, own
+        -- per-icon settings, own placement). Automatic callers keep the dedupe.
+        if not allowCopy then return true end -- already tracked
+        local MAX_COPIES = 5
+        local found
+        for n = 2, MAX_COPIES do
+            local candidate = ArcAuras.MakeSpellID(spellID, n)
+            if not db.trackedSpells[candidate] then
+                found = candidate
+                copyIndex = n
+                break
+            end
+        end
+        if not found then
+            print("|cff00CCFF[Arc Auras]|r Copy limit reached for this spell (" .. MAX_COPIES .. " icons).")
+            return false
+        end
+        arcID = found
+    end
 
     local name, icon = GetSpellNameAndIcon(spellID)
-    
+    local displayName = name or ("Spell " .. spellID)
+    if copyIndex > 1 then displayName = displayName .. " (" .. copyIndex .. ")" end
+
     db.trackedSpells[arcID] = {
         spellID = spellID,
-        name = name or ("Spell " .. spellID),
+        name = displayName,
         icon = icon or 134400,
         -- forceShow defaults to nil (off). User can enable via options or right-click menu
         -- for engineering enchants, items-as-spells, profession abilities, etc.
     }
+
+    -- NEW-ICON DEFAULT (Arc's call 2026-09-14): a freshly added spell icon
+    -- loads only on the spec it was created on, not all specs (every caller
+    -- of this function is an explicit user add - options popup, drag-drop
+    -- widget). The Load Conditions spec toggles widen it; imports and shared
+    -- profiles copy configs wholesale and never pass through here.
+    local curSpec = GetSpecialization and GetSpecialization()
+    if curSpec then
+        db.trackedSpells[arcID].showOnSpecs = { curSpec }
+    end
 
     if ArcAuras.InvalidateSettingsCache then ArcAuras.InvalidateSettingsCache(arcID) end
 
@@ -1774,7 +1904,7 @@ function ArcAurasCooldown.AddTrackedSpell(spellID)
         local spellConfig = {
             type = "spell",
             spellID = spellID,
-            name = name or ("Spell " .. spellID),
+            name = displayName,
             icon = icon or 134400,
             enabled = true,
         }
@@ -1791,7 +1921,7 @@ function ArcAurasCooldown.AddTrackedSpell(spellID)
             name or "Spell", spellID))
     end
     
-    return true
+    return true, arcID, displayName
 end
 
 function ArcAurasCooldown.RemoveTrackedSpell(arcID)
@@ -1981,23 +2111,32 @@ local _onEventFn = function(self, event, arg1, arg2, arg3, arg4)
     elseif event == "SPELL_RANGE_CHECK_UPDATE" then
         -- arg1=spellID, arg2=inRange, arg3=checksRange
         local spellID, inRange, checksRange = arg1, arg2, arg3
-        local arcID = ArcAurasCooldown.spellsByID[spellID]
-        local fd = arcID and ArcAurasCooldown.spellData[arcID]
-        if fd and fd.needsRangeCheck then
-            fd.spellOutOfRange = (checksRange == true and inRange == false)
-            if fd.frame and fd.frame:IsShown() and not fd.frame._arcHiddenNotInSpec then
-                local isOnCD, isRechargingV = GetCooldownState(fd.spellID, fd.isChargeSpell, fd)
-                ApplySpellStateVisuals(fd, isOnCD, nil, isRechargingV)
+        ForEachFDForSpell(spellID, function(fd)
+            if fd.needsRangeCheck then
+                fd.spellOutOfRange = (checksRange == true and inRange == false)
+                if fd.frame and fd.frame:IsShown() and not fd.frame._arcHiddenNotInSpec then
+                    local isOnCD, isRechargingV = GetCooldownState(fd.spellID, fd.isChargeSpell, fd)
+                    ApplySpellStateVisuals(fd, isOnCD, nil, isRechargingV)
+                end
             end
-        end
+        end)
 
     elseif event == "SPELL_UPDATE_USES" then
         local spellID = arg1
         local baseSpellID = arg2
-        local arcID = ArcAurasCooldown.spellsByID[spellID] or ArcAurasCooldown.spellsByID[baseSpellID]
-        local fd = arcID and ArcAurasCooldown.spellData[arcID]
-        if fd and fd.frame and fd.frame:IsShown() then
-            FeedCooldown(fd)
+        local fed
+        local function feedUses(fd)
+            if fd.frame and fd.frame:IsShown() then
+                fed = fed or {}
+                if not fed[fd.arcID] then
+                    fed[fd.arcID] = true
+                    FeedCooldown(fd)
+                end
+            end
+        end
+        ForEachFDForSpell(spellID, feedUses)
+        if baseSpellID and baseSpellID ~= spellID then
+            ForEachFDForSpell(baseSpellID, feedUses)
         end
 
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
@@ -2011,18 +2150,19 @@ local _onEventFn = function(self, event, arg1, arg2, arg3, arg4)
         local castSpellID = arg3
         -- Override-aware: cast events carry the OVERRIDE id (Voltaic Blaze,
         -- Windstrike), which spellsByID (base-keyed) misses — the reverse map
-        -- built by the feeds resolves it back to the tracked base icon.
-        local castArcID = castSpellID and FindArcIDForSpell(castSpellID)
-        local castFd = castArcID and ArcAurasCooldown.spellData[castArcID]
-        if castFd and castFd.isChargeSpell and castFd.maxCharges == 2
-           and castFd._arcShadowCD and castFd._arcShadowCharge
-           and not castFd._arcShadowCD:IsShown() then
-            if castFd._arcShadowCharge:IsShown() then
-                castFd._arcICDCastToZero = true
-            else
-                castFd._arcICDCastToZero = nil
+        -- built by the feeds resolves it back to the tracked base icon(s).
+        -- Every copy samples its OWN shadows (independent frames).
+        ForEachFDForSpell(castSpellID, function(castFd)
+            if castFd.isChargeSpell and castFd.maxCharges == 2
+               and castFd._arcShadowCD and castFd._arcShadowCharge
+               and not castFd._arcShadowCD:IsShown() then
+                if castFd._arcShadowCharge:IsShown() then
+                    castFd._arcICDCastToZero = true
+                else
+                    castFd._arcICDCastToZero = nil
+                end
             end
-        end
+        end)
 
 
 
@@ -2055,21 +2195,17 @@ local _onEventFn = function(self, event, arg1, arg2, arg3, arg4)
     elseif event == "SPELL_ACTIVATION_OVERLAY_GLOW_SHOW" then
         -- Proc glows fire for the OVERRIDE form — resolve via the reverse map too
         local spellID = arg1
-        local arcID = FindArcIDForSpell(spellID)
-        local fd = arcID and ArcAurasCooldown.spellData[arcID]
-        if fd then
+        ForEachFDForSpell(spellID, function(fd)
             UpdateProcGlow(fd, true)
             FeedCooldown(fd)
-        end
+        end)
 
     elseif event == "SPELL_ACTIVATION_OVERLAY_GLOW_HIDE" then
         local spellID = arg1
-        local arcID = FindArcIDForSpell(spellID)
-        local fd = arcID and ArcAurasCooldown.spellData[arcID]
-        if fd then
+        ForEachFDForSpell(spellID, function(fd)
             UpdateProcGlow(fd, false)
             FeedCooldown(fd)
-        end
+        end)
 
     elseif event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
         -- Combat state changed: re-feed all spell frames so shadow state is fresh

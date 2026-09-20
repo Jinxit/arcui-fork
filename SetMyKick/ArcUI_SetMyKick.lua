@@ -131,6 +131,18 @@ local MARKER_NAMES = {
 }
 
 local PREFIX = "|cff33ff99Kick Assist|r: "
+
+-- MACRO LIMITS. These used to be plain globals; on 12.x they live under
+-- Constants.MacroConsts and the bare globals are NIL, which broke every macro
+-- path in this file: three `numChar >= MAX_CHARACTER_MACROS` compares threw
+-- "attempt to compare nil with number" (Lua compiles a >= b as b <= a, so the
+-- NIL constant is the one reported on the left), and the macro-list builder did
+-- arithmetic on nil in `AddRow(MAX_ACCOUNT_MACROS + i)`.
+-- Declaring them as locals shadows the missing globals, so every existing use
+-- site works unchanged. Fallbacks are the live 12.1 values (120 / 30) verified
+-- against Blizzard_APIDocumentationGenerated/MacroConstantsDocumentation.lua.
+local MAX_ACCOUNT_MACROS   = (Constants and Constants.MacroConsts and Constants.MacroConsts.MAX_ACCOUNT_MACROS) or 120
+local MAX_CHARACTER_MACROS = (Constants and Constants.MacroConsts and Constants.MacroConsts.MAX_CHARACTER_MACROS) or 30
 local FOCUS_ICON = 132212  -- set-focus macro icon (fileID)
 
 -- Interrupt spell per class, spec overrides keyed by specialization ID.
@@ -158,6 +170,7 @@ local eventFrame
 local slashRegistered = false
 local myName             -- our character name, cached while readable (UnitName is secret inside M+)
 local smartOpenExpire = 0  -- GetTime() until which Smart Open watches party chat
+local ActivateRuntime, DeactivateRuntime  -- defined at the bottom; forward-declared for the popup's master toggle
 
 -- Cache our own name while it is readable. UnitName("player") is secret inside instances,
 -- so we grab it on login / zoning and reuse that string to recognize our own chat echo.
@@ -500,6 +513,34 @@ local function ManageMarkerInBody(body)
 	return table.concat(lines, "\n")
 end
 
+-- Locate this module's managed macro.
+--
+-- WHY NOT GetMacroIndexByName ALONE: it searches the ACCOUNT bucket first and
+-- cannot be pointed at one bucket, so when the same name exists in both it
+-- returns the ACCOUNT index. Every CreateMacro in this file passes
+-- isCharacter = true, so the macro we manage is always a CHARACTER macro -- the
+-- old lookup would then edit the user's unrelated account macro of the same
+-- name and leave ours untouched. Character bucket is searched first here.
+--
+-- WHY THIS KEEPS A FALLBACK (and deliberately differs from the standalone
+-- KickAssist, which does a STRICT bucket search): that addon has a real
+-- account-wide mode and must never cross buckets. ArcUI has no such mode, so if
+-- the ONLY macro with this name lives in the account bucket it is still the
+-- user's macro and the one sitting on their action bar. Returning nil there
+-- would fall through to the create branch and make a SECOND macro with the same
+-- name, after which every edit would go to the invisible one. Prefer the
+-- character macro, but never pretend an existing account macro is not there.
+-- Nothing here deletes or rewrites a macro; it only reports an index.
+local function FindManagedMacroIndex(name)
+	if not name or name == "" then return nil end
+	local _, numChar = GetNumMacros()
+	for i = 1, (numChar or 0) do
+		local gi = MAX_ACCOUNT_MACROS + i
+		if GetMacroInfo(gi) == name then return gi end
+	end
+	return GetMacroIndexByName(name)
+end
+
 local function UpdateManagedMacro()
 	if not EnsureDB() then return end
 	if not GDB.enabled then return end
@@ -510,7 +551,7 @@ local function UpdateManagedMacro()
 	local body = tostring(DB.macroTemplate or DEFAULT_MACRO)
 	body = body:gsub("{interrupt}", interrupt):gsub("{marker}", tostring(DB.marker)):gsub("{kick}", tostring(DB.marker))
 	if body == "" then return end
-	local idx = GetMacroIndexByName(name)
+	local idx = FindManagedMacroIndex(name)
 	if idx and idx > 0 then
 		EditMacro(idx, name, "INV_Misc_QuestionMark", body)
 	else
@@ -530,7 +571,7 @@ local function UpdateSetFocusMacro(create)
 	local name = DB.setFocusName ~= "" and DB.setFocusName or DEFAULTS.setFocusName
 	local interrupt = GetMyInterruptName() or ""
 	local body = tostring(DB.setFocusTemplate or SET_FOCUS_MACRO):gsub("{interrupt}", interrupt):gsub("{marker}", tostring(DB.marker)):gsub("{kick}", tostring(DB.marker))
-	local idx = GetMacroIndexByName(name)
+	local idx = FindManagedMacroIndex(name)
 	if idx and idx > 0 then
 		EditMacro(idx, name, FOCUS_ICON, body)
 	elseif create then
@@ -550,7 +591,7 @@ local function UpdateAutoTabMacro(create)
 	local name = DB.autoTabName ~= "" and DB.autoTabName or DEFAULTS.autoTabName
 	local interrupt = GetMyInterruptName() or ""
 	local body = tostring(DB.autoTabTemplate or AUTOTAB_MACRO):gsub("{interrupt}", interrupt):gsub("{marker}", tostring(DB.marker)):gsub("{kick}", tostring(DB.marker))
-	local idx = GetMacroIndexByName(name)
+	local idx = FindManagedMacroIndex(name)
 	if idx and idx > 0 then
 		EditMacro(idx, name, "INV_Misc_QuestionMark", body)
 	elseif create then
@@ -630,7 +671,7 @@ local function CreateUI()
 	EnsureDB()
 
 	frame = CreateFrame("Frame", "ArcUI_SetMyKickFrame", UIParent, "BackdropTemplate")
-	frame:SetSize(300, 476)
+	frame:SetSize(300, 500)
 	frame:SetFrameStrata("DIALOG")
 	frame:SetToplevel(true)
 	frame:SetClampedToScreen(true)
@@ -657,7 +698,7 @@ local function CreateUI()
 
 	local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 	title:SetPoint("TOP", 0, -16)
-	title:SetText("Kick Assist")
+	title:SetText("ArcUI Kick Assist")
 
 	local instr = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	instr:SetPoint("TOP", title, "BOTTOM", 0, -6)
@@ -706,25 +747,41 @@ local function CreateUI()
 	end)
 	frame.noneButton = none
 
-	frame.readyCB = MakeCheck(frame, "Show on ready check (in Mythic+)", 22, -196,
+	-- Master switch, same account-wide flag as the options tab. Turning it OFF here
+	-- keeps THIS window open (so a mis-click can be undone on the spot) but stops the
+	-- runtime, so no more ready-check popups/announces until it is re-enabled.
+	frame.enableCB = MakeCheck(frame, "Enable Kick Assist", 22, -196,
+		function() return GDB.enabled end,
+		function(v)
+			GDB.enabled = v
+			if v then
+				ActivateRuntime()
+			else
+				-- DeactivateRuntime would hide this window; unhook by hand instead.
+				if eventFrame then eventFrame:UnregisterAllEvents() end
+				if alertFrame then alertFrame:UnregisterAllEvents() end
+			end
+		end)
+
+	frame.readyCB = MakeCheck(frame, "Show on ready check (in Mythic+)", 22, -220,
 		function() return DB.showOnReadyCheck end,
 		function(v) DB.showOnReadyCheck = v end)
 
-	frame.smartCB = MakeCheck(frame, "Smart open (only on a marker clash)", 22, -220,
+	frame.smartCB = MakeCheck(frame, "Smart open (only on a marker clash)", 22, -244,
 		function() return DB.smartOpen end,
 		function(v) DB.smartOpen = v end)
 
-	frame.announceCB = MakeCheck(frame, "Announce on ready check", 22, -244,
+	frame.announceCB = MakeCheck(frame, "Announce on ready check", 22, -268,
 		function() return DB.announceOnReadyCheck end,
 		function(v) DB.announceOnReadyCheck = v end)
 
 	local msgLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	msgLabel:SetPoint("TOPLEFT", 22, -274)
+	msgLabel:SetPoint("TOPLEFT", 22, -298)
 	msgLabel:SetText("Message (%MARKER% = your icon):")
 
 	local msgBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
 	msgBox:SetSize(246, 20)
-	msgBox:SetPoint("TOPLEFT", 28, -292)
+	msgBox:SetPoint("TOPLEFT", 28, -316)
 	msgBox:SetAutoFocus(false)
 	msgBox:SetText(DB.message or DEFAULTS.message)
 	msgBox:SetScript("OnEscapePressed", msgBox.ClearFocus)
@@ -737,7 +794,7 @@ local function CreateUI()
 
 	local announce = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
 	announce:SetSize(170, 26)
-	announce:SetPoint("TOP", 0, -324)
+	announce:SetPoint("TOP", 0, -348)
 	announce:SetText("Announce to Group")
 	announce:SetScript("OnClick", function()
 		DB.message = msgBox:GetText()
@@ -746,13 +803,13 @@ local function CreateUI()
 
 	local macroBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
 	macroBtn:SetSize(170, 24)
-	macroBtn:SetPoint("TOP", 0, -358)
+	macroBtn:SetPoint("TOP", 0, -382)
 	macroBtn:SetText("Edit Macro...")
 	macroBtn:SetScript("OnClick", function() SMK.ShowMacroEditor() end)
 
 	-- Drag-to-bars: two ready macros new users can drop straight onto their bars.
 	local dragHeader = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	dragHeader:SetPoint("TOP", 0, -384)
+	dragHeader:SetPoint("TOP", 0, -408)
 	dragHeader:SetText("New? Drag a macro to your action bar:")
 
 	frame.dragIcons = {}
@@ -761,14 +818,14 @@ local function CreateUI()
 		if InCombatLockdown() then return end
 		local name = (DB[nameKey] and DB[nameKey] ~= "") and DB[nameKey] or defName
 		updateFn(true)
-		local idx = GetMacroIndexByName(name)
+		local idx = FindManagedMacroIndex(name)
 		if idx and idx > 0 then PickupMacro(idx) end
 	end
 
 	local function MakeDragBox(xOff, labelText, desc, key, pickup)
 		local box = CreateFrame("Button", nil, frame, "BackdropTemplate")
 		box:SetSize(40, 40)
-		box:SetPoint("TOP", xOff, -402)
+		box:SetPoint("TOP", xOff, -426)
 		box:RegisterForDrag("LeftButton")
 		box:RegisterForClicks("LeftButtonUp")
 		box:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 2 })
@@ -823,6 +880,7 @@ function SMK.ShowUI(fromEvent)
 	end
 	CreateUI()
 	UpdateSelection()
+	frame.enableCB:Refresh()
 	frame.readyCB:Refresh()
 	frame.smartCB:Refresh()
 	frame.announceCB:Refresh()
@@ -1041,9 +1099,13 @@ function SMK.ShowMacroEditor()
 			end)
 			r:Show()
 		end
+		-- `or 0`: a nil limit makes a numeric for throw ("'for' limit must be a
+		-- number"). GetNumMacros should always return two numbers, but this
+		-- builder sits on the ShowUI path that was already crashing, so it is
+		-- not the place to assume.
 		local numAccount, numChar = GetNumMacros()
-		for i = 1, numAccount do AddRow(i) end
-		for i = 1, numChar do AddRow(MAX_ACCOUNT_MACROS + i) end
+		for i = 1, (numAccount or 0) do AddRow(i) end
+		for i = 1, (numChar or 0) do AddRow(MAX_ACCOUNT_MACROS + i) end
 		pickChild:SetHeight(math.max(1, count * 18))
 		pickScroll:SetVerticalScroll(0)
 	end
@@ -1116,7 +1178,7 @@ end
 -- Runtime activation (only while enabled and not dormant)
 --------------------------------------------------------------------------------
 
-local function ActivateRuntime()
+function ActivateRuntime()
 	if not eventFrame then
 		eventFrame = CreateFrame("Frame")
 		eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2)
@@ -1159,10 +1221,20 @@ local function ActivateRuntime()
 	SyncInterruptAlert()
 end
 
-local function DeactivateRuntime()
+function DeactivateRuntime()
 	if eventFrame then eventFrame:UnregisterAllEvents() end
 	if alertFrame then alertFrame:UnregisterAllEvents() end
 	if frame then frame:Hide() end
+end
+
+-- Settings > Modules master switch: drives the SAME account-wide flag as the
+-- tab toggle and the popup checkbox (one flag, never two). While the
+-- standalone owns the feature the flag is still saved for later.
+function SMK.SetEnabled(v)
+	if EnsureDB() == nil then return end
+	GDB.enabled = v and true or false
+	if IsStandaloneLoaded() then return end
+	if GDB.enabled then ActivateRuntime() else DeactivateRuntime() end
 end
 
 --------------------------------------------------------------------------------

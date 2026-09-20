@@ -36,15 +36,35 @@ local AIG = ns.AuraIconGlows
 -- tie with them (creation order decides) and rendered BEHIND the border.
 -- A higher frame level wins decisively; glows draw over the border and text,
 -- matching the CDM icon convention (Blizzard proc glows cover everything).
-local function GlowHost(btn)
+-- hostCfg (optional) = { x, y, strata, level }: X/Y offsets shift the whole
+-- glow layer (every pack style anchors into it), strata/level override its
+-- placement. Passed from ApplyPandemic and REMEMBERED on the button — the
+-- argless calls from BuildPack/BuildKillMask and the re-pin path reuse the
+-- last values instead of resetting them.
+local function GlowHost(btn, hostCfg)
     local base = btn.TextOverlay or btn
     local g = btn._arcGlowLayer
     if not g then
         g = CreateFrame("Frame", nil, base)
-        g:SetAllPoints(btn)
         btn._arcGlowLayer = g
     end
-    g:SetFrameLevel(base:GetFrameLevel() + 1)
+    if hostCfg then btn._arcGlowHostCfg = hostCfg end
+    local hc = btn._arcGlowHostCfg
+    local x = hc and hc.x or 0
+    local y = hc and hc.y or 0
+    g:ClearAllPoints()
+    g:SetPoint("TOPLEFT", btn, "TOPLEFT", x, y)
+    g:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", x, y)
+    if hc and hc.strata then
+        g:SetFrameStrata(hc.strata)
+    else
+        g:SetFrameStrata(base:GetFrameStrata())
+    end
+    if hc and hc.level then
+        g:SetFrameLevel(hc.level)
+    else
+        g:SetFrameLevel(base:GetFrameLevel() + 1)
+    end
     return g
 end
 
@@ -211,11 +231,19 @@ local function BuildPack(btn, styleKey, cfg, W, H)
         table.insert(pack.ags, ag)
         return ag
     end
+    -- atlas packs anchor to HOST (not the button): the host carries the
+    -- user's X/Y offset, and Scale multiplies the baked texture rect
+    local s = cfg.scale or 1
+    if not (s > 0) then s = 1 end
     if styleKey == "Proc" then
         local tex = newTex()
         tex:SetAtlas("UI-HUD-ActionBar-Proc-Loop-Flipbook")
-        tex:SetPoint("TOPLEFT", btn, "TOPLEFT", -10, 10)
-        tex:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 10, -10)
+        -- the flipbook art is baked GOLD — desaturate like Pulse/Ants so the
+        -- user's vertex color drives the tint (blue-over-yellow bug otherwise;
+        -- the ns.Glows preview uses grayscale art, so only LIVE looked wrong)
+        tex:SetDesaturated(true)
+        tex:SetSize((W + 20) * s, (H + 20) * s)
+        tex:SetPoint("CENTER", host, "CENTER", 0, 0)
         local ag = newAG()
         local fb = ag:CreateAnimation("FlipBook")
         fb:SetTarget(tex)
@@ -223,15 +251,24 @@ local function BuildPack(btn, styleKey, cfg, W, H)
         -- Blizzard's proc loop sheet is 6 ROWS x 5 COLUMNS (ActionButton XML)
         fb:SetFlipBookRows(6); fb:SetFlipBookColumns(5); fb:SetFlipBookFrames(30)
     elseif styleKey == "Pulse" then
+        -- CDM's own VisualAlert flash art. The previous atlas name
+        -- ("UI-HUD-ActionBar-Proc-Glow") does not exist in the client — the
+        -- texture rendered EMPTY, so the style showed nothing on live
+        -- buttons while the ns.Glows preview (different renderer) worked.
+        -- Desaturated so the user's color drives the tint; sized like CDM's
+        -- VisualAlert container (66/45 of the icon rect); alpha bounce
+        -- matches ns.Glows' cdm_flash (0.25->1, IN_OUT).
         local tex = newTex()
-        tex:SetAtlas("UI-HUD-ActionBar-Proc-Glow")
-        tex:SetPoint("TOPLEFT", btn, "TOPLEFT", -12, 12)
-        tex:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 12, -12)
+        tex:SetAtlas("UI-CooldownManager-VisualAlert-Glow")
+        tex:SetDesaturated(true)
+        tex:SetSize(W * 66 / 45 * s, H * 66 / 45 * s)
+        tex:SetPoint("CENTER", host, "CENTER", 0, 0)
         local ag = newAG()
         ag:SetLooping("BOUNCE")
         local al = ag:CreateAnimation("Alpha")
         al:SetTarget(tex)
-        al:SetFromAlpha(1); al:SetToAlpha(0.35); al:SetDuration(0.6)
+        al:SetSmoothing("IN_OUT")
+        al:SetFromAlpha(0.25); al:SetToAlpha(1); al:SetDuration(0.5)
     elseif styleKey == "Ants" then
         -- Blizzard's CDM marching-ants flipbook (EQOL-verified params:
         -- 6 rows x 5 columns x 30 frames, 1s loop, +17px padding).
@@ -239,8 +276,8 @@ local function BuildPack(btn, styleKey, cfg, W, H)
         local tex = newTex()
         tex:SetAtlas("VisualAlert_Ants_Flipbook")
         tex:SetDesaturated(true)
-        tex:SetSize(W + 17, H + 17)
-        tex:SetPoint("CENTER", btn, "CENTER", 0, 0)
+        tex:SetSize((W + 17) * s, (H + 17) * s)
+        tex:SetPoint("CENTER", host, "CENTER", 0, 0)
         local ag = newAG()
         local fb = ag:CreateAnimation("FlipBook")
         fb:SetTarget(tex)
@@ -250,8 +287,8 @@ local function BuildPack(btn, styleKey, cfg, W, H)
         local tex = newTex()
         tex:SetTexture("Interface\\Cooldown\\star4")
         tex:SetBlendMode("ADD")
-        tex:SetPoint("TOPLEFT", btn, "TOPLEFT", -14, 14)
-        tex:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 14, -14)
+        tex:SetSize((W + 28) * s, (H + 28) * s)
+        tex:SetPoint("CENTER", host, "CENTER", 0, 0)
         local ag = newAG()
         local r = ag:CreateAnimation("Rotation")
         r:SetTarget(tex)
@@ -259,15 +296,15 @@ local function BuildPack(btn, styleKey, cfg, W, H)
     elseif styleKey == "AutoCast" then
         -- LCG autocast rebuilt as animations: 4 additive sparkles orbiting a
         -- smoothed path through the button's corners
-        local half = math.min(W, H) / 2 + 2
+        local half = (math.min(W, H) / 2 + 2) * s
         local corners = { { -half, half }, { half, half }, { half, -half }, { -half, -half } }
         for di = 1, 4 do
             local sx, sy = corners[di][1], corners[di][2]
             local tex = newTex()
             tex:SetTexture("Interface\\Cooldown\\star4")
             tex:SetBlendMode("ADD")
-            tex:SetSize(14, 14)
-            tex:SetPoint("CENTER", btn, "CENTER", sx, sy)
+            tex:SetSize(14 * s, 14 * s)
+            tex:SetPoint("CENTER", host, "CENTER", sx, sy)
             local ag = newAG()
             local path = ag:CreateAnimation("Path")
             path:SetTarget(tex)
@@ -287,8 +324,8 @@ local function BuildPack(btn, styleKey, cfg, W, H)
             tex:SetTexture("Interface\\Buttons\\WHITE8X8")
             if w then tex:SetWidth(w) end
             if hh then tex:SetHeight(hh) end
-            tex:SetPoint(p1, btn, p1)
-            tex:SetPoint(p2, btn, p2)
+            tex:SetPoint(p1, host, p1)
+            tex:SetPoint(p2, host, p2)
         end
         edge("TOPLEFT", "TOPRIGHT", nil, 2)
         edge("BOTTOMLEFT", "BOTTOMRIGHT", nil, 2)
@@ -351,6 +388,28 @@ function AIG.ApplyPandemic(btn, holder, settings)
     if not (btn and holder) then return end
     if not btn.AddPandemicRegion then return end   -- pre-12.1 client
 
+    -- the ACTIVE glow + timing modes live under cooldownStateVisuals.
+    -- readyState.* in the aura option set (auraActiveState.* is the
+    -- missing-glow side) — mirror the panel exactly
+    local aa = (settings and settings.cooldownStateVisuals
+        and settings.cooldownStateVisuals.readyState) or {}
+    local pb = settings and settings.pandemicBorder or {}
+    -- Show Icon off no longer gates glows: the toggle now hides only the
+    -- icon ART (transparent-icons request) and glow visibility is owned by
+    -- the glow toggles themselves.
+
+    -- host-level knobs (offset/strata/level): applied to the glow LAYER on
+    -- every call — never part of the pack identity, so sliding them does not
+    -- mint new packs
+    local strata = aa.glowFrameStrata
+    if strata == "inherit" or strata == "" then strata = nil end
+    btn._arcGlowHostCfg = {
+        x = aa.glowXOffset or 0,
+        y = aa.glowYOffset or 0,
+        strata = strata,
+        level = aa.glowFrameLevel,
+    }
+
     -- RE-PIN the glow layer EVERY call, before the identity early-return:
     -- ApplySettings re-levels the button's TextOverlay from the holder on
     -- every pass, and children do NOT follow a parent SetFrameLevel — with
@@ -359,18 +418,12 @@ function AIG.ApplyPandemic(btn, holder, settings)
     -- invisible — audit finding)
     if btn._arcGlowLayer then GlowHost(btn) end
 
-    -- the ACTIVE glow + timing modes live under cooldownStateVisuals.
-    -- readyState.* in the aura option set (auraActiveState.* is the
-    -- missing-glow side) — mirror the panel exactly
-    local aa = (settings and settings.cooldownStateVisuals
-        and settings.cooldownStateVisuals.readyState) or {}
-    local pb = settings and settings.pandemicBorder or {}
-
     local function ColorOf(c, dr, dg, db)
         return { c and c.r or dr, c and c.g or dg, c and c.b or db }
     end
     local knobs = { lines = aa.glowLines, speed = aa.glowSpeed,
-        thickness = aa.glowThickness, length = aa.glowLength }
+        thickness = aa.glowThickness, length = aa.glowLength,
+        scale = aa.glowScale }
 
     -- what should exist? records = { {style=, color=, register=, masked=} }
     -- register=true  -> engine-shown only during the pandemic window
@@ -417,7 +470,8 @@ function AIG.ApplyPandemic(btn, holder, settings)
     if #parts > 0 then
         parts[#parts + 1] = (aa.glowLines or 8) .. ":" .. (aa.glowSpeed or 0.25)
             .. ":" .. (aa.glowThickness or 3) .. ":" .. (aa.glowIntensity or 1)
-            .. ":" .. (aa.glowLength or 0) .. ":" .. W .. "x" .. H
+            .. ":" .. (aa.glowLength or 0) .. ":" .. (aa.glowScale or 1)
+            .. ":" .. W .. "x" .. H
     end
     local want = (#parts > 0) and table.concat(parts, "|") or nil
 

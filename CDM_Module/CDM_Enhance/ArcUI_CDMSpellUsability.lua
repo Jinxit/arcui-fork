@@ -51,6 +51,17 @@ local function ApplyUsabilityDesat(frame, iconTex, desaturate)
     -- Without this, the icon stays desaturated until CDM's next RefreshData cycle (~1s).
     if desaturate == nil then
         if wasRequested and iconTex then
+            -- RELEASE, DON'T OVERWRITE (Dalf's "icons randomly stop being
+            -- desaturated while on cooldown"). Usability is only ONE owner of
+            -- desaturation; the COOLDOWN state owns it too. Clearing outright
+            -- here wiped the cooldown's desaturation whenever a spell flipped
+            -- back to usable - which in combat happens constantly as resources
+            -- fluctuate, hence "random" - and the icon stayed bright until
+            -- CDM's next refresh (~1s) repainted it. Turning usability tinting
+            -- off "fixed" it precisely because this path stopped running.
+            -- /afi proof: cooldownDesaturated=true and _arcDesatBranch=C_BIN_CD
+            -- (both owners agreeing it should be grey) on a visibly bright icon.
+            -- So: hand it back to the cooldown owner instead of deciding here.
             frame._arcBypassDesatHook = true
             if iconTex.SetDesaturation then
                 iconTex:SetDesaturation(0)
@@ -58,6 +69,15 @@ local function ApplyUsabilityDesat(frame, iconTex, desaturate)
                 iconTex:SetDesaturated(false)
             end
             frame._arcBypassDesatHook = false
+            -- Re-assert the cooldown owner's decision. It is the authority for
+            -- cooldown desaturation; if it wants grey it repaints immediately,
+            -- so the "snap to colored" behaviour above is preserved for icons
+            -- nothing else claims.
+            if ns.CooldownState and ns.CooldownState.Apply then
+                local cfg = ns.CDMEnhance and ns.CDMEnhance.GetEffectiveIconSettingsForFrame
+                    and ns.CDMEnhance.GetEffectiveIconSettingsForFrame(frame)
+                if cfg then ns.CooldownState.Apply(frame, cfg) end
+            end
         end
         return
     end
@@ -245,7 +265,11 @@ function ns.CDMSpellUsability.OnRefreshIconColor(frame, cfg, spellID, isUsable, 
     -- on-CD → CD tint only. Ready → usability tints.
     -- When called from hook, isUsable/notEnoughMana are pre-computed.
     if isUsable == nil then
-        isUsable, notEnoughMana = C_Spell.IsSpellUsable(spellID)
+        -- SECRECY: item entries (potions) return SECRET usability booleans to
+        -- our tainted stack; testing one throws. nil = unreadable -> leave the
+        -- icon exactly as CDM tinted it.
+        isUsable, notEnoughMana = ns.API.SafeIsSpellUsable(spellID)
+        if isUsable == nil then return end
     end
 
     if isUsable then
@@ -418,7 +442,8 @@ function ns.CDMSpellUsability.HookFrame(frame)
 
                 if state == "NOT_RANGE" then
                     if spellID then
-                        local usable = C_Spell.IsSpellUsable(spellID)
+                        -- secret-safe: nil (item entries) simply skips the alpha push
+                        local usable = ns.API.SafeIsSpellUsable(spellID)
                         if usable and ns.CooldownState and ns.CooldownState.ApplyUsabilityAlpha then
                             ns.CooldownState.ApplyUsabilityAlpha(frame, cfg)
                         end
@@ -517,10 +542,12 @@ function ns.CDMSpellUsability.UpdateGlow(frame, cfg, spellID, isUsable, allDeple
                 elseif cdmState == "NOT_MANA" or cdmState == "NOT_USABLE" then
                     isUsable = false
                 elseif cdmState == "NOT_RANGE" then
-                    -- Out of range doesn't mean not resource-usable — check actual state
-                    isUsable = spellID and C_Spell.IsSpellUsable(spellID) or false
+                    -- Out of range doesn't mean not resource-usable — check actual state.
+                    -- SECRET-SAFE: nil (unreadable, e.g. item entries) -> treat as
+                    -- not usable rather than testing a secret boolean, which throws.
+                    isUsable = (spellID and ns.API.SafeIsSpellUsable(spellID)) or false
                 elseif spellID then
-                    isUsable = C_Spell.IsSpellUsable(spellID)
+                    isUsable = ns.API.SafeIsSpellUsable(spellID) or false
                 end
             end
 
