@@ -38,6 +38,12 @@ local DL = ns.CDMGroups.DynamicLayout
 
 -- Shared helper for DB access
 local Shared = ns.CDMShared
+local PlacementTrace = ns.CDMGroups.PlacementTrace
+local function TracePlacement(reason, data)
+    if PlacementTrace then
+        PlacementTrace.Record(reason, data)
+    end
+end
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- SECRET-SAFE AURA INSTANCE ID CHECK
@@ -1340,14 +1346,26 @@ function DL.CalculateDynamicSlots(group, rows, cols, excludeInactiveAuras)
     local function getSavedOrder(cdID)
         local saved = savedPositions[cdID]
         if saved and saved.type == "group" and saved.target == groupName then
-            if saved.sortIndex then
-                return saved.sortIndex
-            end
+            -- GEOMETRY FIRST -- ONE order source with ReflowGroup (placement-
+            -- trace-proven ping-pong, 2026-08-26): CollectMembersForReflow
+            -- deliberately orders by saved row/col ("authoritative user
+            -- order") while this function PREFERRED the stored sortIndex
+            -- field. Multiple writers stamp sortIndex with different formulas
+            -- (row*cols+col with a LIVE cols, row*100+col, explicit drag
+            -- indices), so records exist whose sortIndex disagrees with their
+            -- geometry -- and then the two engines permanently disagree,
+            -- re-swapping the same pair on every reflow/Layout pass (the
+            -- Strikes 11880 <-> arc_spell_187874 capture). Saved geometry is
+            -- the one truth; the stored sortIndex only serves records with no
+            -- geometry at all.
             if saved.row ~= nil and saved.col ~= nil then
                 if gridShape == "vertical" then
                     return saved.col * rows + saved.row
                 end
                 return saved.row * cols + saved.col
+            end
+            if saved.sortIndex then
+                return saved.sortIndex
             end
         end
         return 9999
@@ -2450,6 +2468,13 @@ local function SavePosition(cdID, groupName, row, col, sortIndex)
         col = col,
         sortIndex = sortIndex or (row * 100 + col),
     }
+    TracePlacement("DynamicLayout.SavePosition", {
+        id = cdID,
+        group = groupName,
+        row = row,
+        col = col,
+        sortIndex = sortIndex,
+    })
 end
 
 -- Collect and categorize group members for reflow
@@ -2753,8 +2778,16 @@ function DL.ReflowGroup(group)
         local cdID = data.cdID
         local member = data.member
         
-        -- Ensure position is saved before removing
-        if not GetSavedPosition(cdID, group.name) then
+        -- Ensure position is saved before removing -- but ONLY for an icon
+        -- with NO saved record at all. The old guard checked "no record FOR
+        -- THIS GROUP", so a member churning through several groups during a
+        -- CDM rebuild (talent swap: the same cooldownID transits Essential,
+        -- Utility and Buffs member lists in one tick) had its TRUE home
+        -- overwritten by every group it merely passed through -- the armed
+        -- placement trace caught 14865's record ending up "Buffs row 2" for
+        -- a utility spell. An existing record, whatever group it names, is
+        -- better information than the transient membership being torn down.
+        if not (ns.CDMGroups.savedPositions and ns.CDMGroups.savedPositions[cdID]) then
             local sortIdx = (member.row or 0) * maxCols + (member.col or 0)
             SavePosition(cdID, group.name, member.row or 0, member.col or 0, sortIdx)
         end
@@ -2773,6 +2806,11 @@ function DL.ReflowGroup(group)
     for row = 0, maxRows - 1 do
         group.grid[row] = {}
     end
+    TracePlacement("DynamicLayout.ReflowGroup.rebuildGrid", {
+        group = group.name,
+        rows = maxRows,
+        columns = maxCols,
+    })
     
     -- ═══════════════════════════════════════════════════════════════════════
     -- CRITICAL FIX: Reserve toSkip members' positions BEFORE building slots
@@ -2808,12 +2846,24 @@ function DL.ReflowGroup(group)
             local member = iconData.member
             
             -- Update member position
+            local previousRow, previousCol = member.row, member.col
             member.row = slot.row
             member.col = slot.col
             
             -- CRITICAL: Set _dynamicSlot for proper tracking
             -- This is the compacted slot index (0-based)
             member._dynamicSlot = i - 1
+            if previousRow ~= slot.row or previousCol ~= slot.col then
+                TracePlacement("DynamicLayout.ReflowGroup.memberPosition", {
+                    id = cdID,
+                    group = group.name,
+                    previousRow = previousRow,
+                    previousCol = previousCol,
+                    row = slot.row,
+                    col = slot.col,
+                    dynamicSlot = member._dynamicSlot,
+                })
+            end
             
             -- Update grid
             group.grid[slot.row][slot.col] = cdID

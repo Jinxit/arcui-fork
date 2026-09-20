@@ -28,6 +28,7 @@ local state = {
 
     -- CDM-specific (what to import)
     cdmImportGroupLayouts   = true,
+    cdmImportIconRouting    = true,
     cdmImportPositions      = true,
     cdmImportIconSettings   = true,
     cdmImportGlobalSettings = true,
@@ -131,7 +132,7 @@ end
 -- ═══════════════════════════════════════════════════════════════════════════
 
 local TYPE_LABELS = {
-    bars    = "|cffFFD100Bars Export|r",
+    bars    = "|cffFFD100Display Export|r",
     cdm     = "|cff00CCFFIcon Manager Export|r",
     master  = "|cff00FF88Master Export|r",
     cr      = "|cffFF7777Cooldown Reminder Export|r",
@@ -209,14 +210,15 @@ local function BuildPreview(t, d)
         local cooldownCount = d.cooldownBars and #d.cooldownBars or 0
         local resourceCount = d.resourceBars and #d.resourceBars or 0
         local timerCount    = d.timerBars and #d.timerBars or 0
-        local total         = auraCount + cooldownCount + resourceCount + timerCount
+        local textureCount  = d.textures and #d.textures or 0
+        local total         = auraCount + cooldownCount + resourceCount + timerCount + textureCount
         table.insert(lines, string.format(
             "|cff888888From:|r %s @ %s\n",
             d.exportedBy or "?", d.realm or "?"
         ))
         table.insert(lines, string.format(
-            "%d bar(s) — |cffFFFF00%d aura|r  |cff00FFFF%d cooldown|r  |cff00FF88%d resource|r  |cffCC66FF%d timer|r",
-            total, auraCount, cooldownCount, resourceCount, timerCount
+            "%d item(s) — |cffFFFF00%d aura|r  |cff00FFFF%d cooldown|r  |cff00FF88%d resource|r  |cffCC66FF%d timer|r  |cffFF88FF%d texture|r",
+            total, auraCount, cooldownCount, resourceCount, timerCount, textureCount
         ))
         if type(d.castbar) == "table" then
             table.insert(lines, "|cffCC66FFCastbar:|r 1 (full castbar config)")
@@ -269,6 +271,7 @@ local function DoImport()
             importFlattenGlobals = state.cdmImportFlattenGlobals,
             importGroupSettings  = state.cdmImportGroupSettings,
             importProfiles       = state.cdmImportProfiles,
+            importIconRouting    = state.cdmImportIconRouting,
         })
         if success then
             print(MSG_PREFIX .. "|cff00ff00CDM import successful!|r")
@@ -564,6 +567,16 @@ function UIE.GetOptionsTable()
                 hidden = function() return state.detectedType ~= "cdm" end,
                 get    = function() return state.cdmImportGroupLayouts end,
                 set    = function(_, v) state.cdmImportGroupLayouts = v end,
+            },
+            cdmImportIconRouting = {
+                type   = "toggle",
+                name   = "New Icons",
+                desc   = "Import the New Icons routing (where Essential / Utility / Buff icons go when the Cooldown Manager adds them with no saved position).\n\nApplied to THIS SPEC only, so it never changes routing on your other characters. Uncheck to keep your own.",
+                order  = 21.5,
+                width  = 0.7,
+                hidden = function() return state.detectedType ~= "cdm" end,
+                get    = function() return state.cdmImportIconRouting ~= false end,
+                set    = function(_, v) state.cdmImportIconRouting = v end,
             },
             cdmImportPositions = {
                 type   = "toggle",

@@ -780,6 +780,11 @@ local function ApplyAppearanceInternal(cfg)
     mainFrame.fillBar:SetStatusBarTexture(tex)
     mainFrame.positioner:SetStatusBarTexture(tex)
 
+    -- USE TEXTURE COLORS: claim (or release) the fill tint (see ns.API.SetNaturalFill)
+    if ns.API and ns.API.SetNaturalFill then
+        ns.API.SetNaturalFill(mainFrame.fillBar, ns.API.IsNaturalFill(cfg))
+    end
+
     local bc = cfg.barColor or {r=1,g=0.65,b=0,a=1}
     mainFrame.fillBar:SetStatusBarColor(bc.r, bc.g, bc.b, bc.a or 1)
 
@@ -826,7 +831,8 @@ function FC.ApplyAppearance()
     if not mainFrame then return end
     local cfg = GetDB()
     if not cfg then return end
-    if not cfg.enabled then
+    if not cfg.enabled
+       or (ns.API and ns.API.IsModuleEnabled and not ns.API.IsModuleEnabled("castbar")) then
         mainFrame:Hide()
         mainFrame:EnableMouse(false)
         mainFrame.spark:Hide()
@@ -984,7 +990,8 @@ end
 StartCast = function()
     if not mainFrame or not UnitExists("focus") then return end
     local cfg = GetDB()
-    if not cfg or not cfg.enabled then return end
+    if not cfg or not cfg.enabled
+       or (ns.API and ns.API.IsModuleEnabled and not ns.API.IsModuleEnabled("castbar")) then return end
 
     local name, text, texture, notInterruptible, spellID, isEmpowered
     local duration
@@ -1271,7 +1278,8 @@ function FC.ShowPreview()
     CreateFocusFrames()
     if not mainFrame then return end
     local cfg = GetDB()
-    if not cfg or not cfg.enabled then return end
+    if not cfg or not cfg.enabled
+       or (ns.API and ns.API.IsModuleEnabled and not ns.API.IsModuleEnabled("castbar")) then return end
     if not isEnabled then FC.Enable() end
 
     ApplyAppearanceInternal(cfg)

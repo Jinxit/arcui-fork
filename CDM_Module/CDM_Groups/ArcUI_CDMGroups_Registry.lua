@@ -80,9 +80,19 @@ FrameSources[3] = {
         if not lookup then return nil end
         for frame in pairs(lookup) do
             if frame and frame.cooldownID == cdID then
-                local entry = Registry.byAddress[tostring(frame)]
-                if entry then
-                    return frame, entry, entry.viewerType, entry.defaultGroup, entry.viewerName
+                -- ARC AUTHORITY GATE: for arc string ids, `cooldownID == cdID`
+                -- is NOT proof of life -- a destroyed arc frame kept both its
+                -- id and its index entry, and this source handed the corpse to
+                -- re-adoption passes (phantom group member, ghost border,
+                -- extra column). The live ArcAuras.frames table is the ONLY
+                -- authority on which frame currently owns an arc id.
+                local isArc = type(cdID) == "string" and cdID:find("^arc_") ~= nil
+                if not isArc or (ns.ArcAuras and ns.ArcAuras.frames
+                    and ns.ArcAuras.frames[cdID] == frame) then
+                    local entry = Registry.byAddress[tostring(frame)]
+                    if entry then
+                        return frame, entry, entry.viewerType, entry.defaultGroup, entry.viewerName
+                    end
                 end
             end
         end
@@ -274,6 +284,37 @@ function Registry:_handleFrameRecycled(existing, frame)
     end
 end
 
+-- Remove a frame from the registry entirely. For DELIBERATE destroys only
+-- (ArcAuras.DestroyFrame). Without this the byCooldownID index kept returning
+-- the corpse through FrameSources[3], whose only validity test is
+-- frame.cooldownID == cdID -- still true on a destroyed arc frame. That stale
+-- hit is how a condition-destroyed timer got re-adopted into its old group as
+-- a phantom member: ghost border + tooltip at the slot, and the group grew a
+-- column for the member that should not exist.
+function Registry:UnregisterFrame(frame)
+    if not frame then return end
+    local addr = tostring(frame)
+    local entry = self.byAddress[addr]
+    if entry then
+        local cdID = entry.cooldownID
+        if cdID and self.byCooldownID[cdID] then
+            self.byCooldownID[cdID][frame] = nil
+            if not next(self.byCooldownID[cdID]) then self.byCooldownID[cdID] = nil end
+        end
+        local vn = entry.viewerName
+        if vn and self.byViewer[vn] then
+            self.byViewer[vn][frame] = nil
+        end
+        self.byAddress[addr] = nil
+    end
+    -- the frame's LIVE id can differ from the entry snapshot -- sweep it too
+    local liveCd = frame.cooldownID
+    if liveCd and self.byCooldownID[liveCd] then
+        self.byCooldownID[liveCd][frame] = nil
+        if not next(self.byCooldownID[liveCd]) then self.byCooldownID[liveCd] = nil end
+    end
+end
+
 -- Get entry for a frame
 function Registry:GetEntry(frame)
     return self.byAddress[tostring(frame)]
@@ -312,7 +353,7 @@ function Registry:GetSpellInfoForCooldownID(cooldownID)
             -- Get equipped trinket info
             local itemID = GetInventoryItemID("player", id)
             if itemID then
-                local name, _, _, _, _, _, _, _, _, icon = GetItemInfo(itemID)
+                local name, _, _, _, _, _, _, _, _, icon = C_Item.GetItemInfo(itemID)
                 return {
                     cooldownID = cooldownID,
                     spellID = nil,
@@ -336,7 +377,7 @@ function Registry:GetSpellInfoForCooldownID(cooldownID)
             end
         elseif arcType == "item" and id then
             -- Get specific item info
-            local name, _, _, _, _, _, _, _, _, icon = GetItemInfo(id)
+            local name, _, _, _, _, _, _, _, _, icon = C_Item.GetItemInfo(id)
             return {
                 cooldownID = cooldownID,
                 spellID = nil,

@@ -988,6 +988,80 @@ ns.DB_DEFAULTS.char.focusCastbar = {
 }
 
 -- ===================================================================
+-- TARGET CASTBAR (tracks the current target's casts; clone of the focus bar)
+-- ===================================================================
+ns.DB_DEFAULTS.char.targetCastbar = {
+  enabled             = false,
+  width               = 220,
+  height              = 18,
+  barPosition         = { point = "CENTER", relPoint = "CENTER", x = 0, y = -120 },
+  barAnchorPoint      = "CENTER",
+  anchorToFrame       = false,
+  anchorFrameName     = "",
+  anchorPoint         = "CENTER",
+  anchorRelativePoint = "CENTER",
+  anchorOffsetX       = 0,
+  anchorOffsetY       = 0,
+  barFrameStrata      = "MEDIUM",
+  barColor            = { r = 1, g = 0.65, b = 0, a = 1 },
+  showBackground      = true,
+  backgroundColor     = { r = 0.1, g = 0.1, b = 0.1, a = 0.9 },
+  showBorder          = true,
+  borderColor         = { r = 0, g = 0, b = 0, a = 1 },
+  drawnBorderThickness = 2,
+  -- Glow outline defaults ON for a fresh target castbar (matches the dev's intent);
+  -- the castbar itself is still opt-in via targetCastbar.enabled = false.
+  showGlow            = true,
+  glowType            = "pixel",
+  glowColor           = { r = 1, g = 0.65, b = 0, a = 1 },
+  glowWidth           = 2,
+  glowLines           = 8,
+  glowFrequency       = 0.25,
+  showSpellName       = true,
+  spellNameMaxWidth   = 0,
+  showTimer           = true,
+  showCasterName      = true,
+  casterNameColor     = { r = 1, g = 0.82, b = 0, a = 1 },
+  casterNameOffsetX   = 0,
+  casterNameOffsetY   = 0,
+  casterNameAnchor    = "RIGHT",
+  showTargetTarget     = false,
+  targetTargetColor    = { r = 0.6, g = 0.8, b = 1, a = 1 },
+  targetTargetOffsetX  = 0,
+  targetTargetOffsetY  = 0,
+  targetTargetAnchor   = "RIGHT",
+  showRaidMarker      = true,
+  raidMarkerSize      = 32,
+  raidMarkerAnchor    = "LEFT",
+  raidMarkerOffsetX   = -36,
+  raidMarkerOffsetY   = 0,
+  font                = "Friz Quadrata TT",
+  fontSize            = 11,
+  textOutline         = "THICKOUTLINE",
+  textColor           = { r = 1, g = 1, b = 1, a = 1 },
+  texture             = "Blizzard",
+  uninterruptibleEnabled = false,
+  uninterruptibleColor   = { r = 0.5, g = 0.5, b = 0.5, a = 1 },
+  raidMarkerDefault    = 8,      -- index shown in preview (moon=8); 0 = off
+  hideNotInterruptible = false,
+  hideNotImportant     = false,  -- opt-in: only show target casts Blizzard marks important
+  importantGlowEnabled   = false,
+  importantGlowType      = "pixel",
+  importantGlowColor     = { r = 1, g = 0.2, b = 0.2, a = 1 },
+  importantGlowLines     = 8,
+  importantGlowFrequency = 0.25,
+  importantGlowThickness = 2,
+  kickEnabled       = false,
+  kickNotReadyColor = { r = 0.55, g = 0.55, b = 0.55, a = 1 },
+  kickTickColor     = { r = 1, g = 1, b = 1, a = 1 },
+  holdEnabled          = false,
+  holdDuration         = 0.8,
+  holdSuccessColor     = { r = 0.2, g = 1.0, b = 0.2, a = 1 },
+  holdFailColor        = { r = 1.0, g = 0.5, b = 0.0, a = 1 },
+  holdInterruptedColor = { r = 0.2, g = 0.4, b = 1.0, a = 1 },
+}
+
+-- ===================================================================
 -- HELPER: Get Bar Config (Buff/Debuff bars)
 -- ===================================================================
 function ns.API.GetBarConfig(barNumber)
@@ -1472,6 +1546,7 @@ function ns.API.InitializeNewTexture()
       cfg.tracking.buffName = "(Not configured yet)"
       cfg.tracking.spellID = 0
       cfg.tracking.cooldownID = 0
+      cfg.tracking.trackType = ""  -- Force user to select (same as bars)
       ns.API.InvalidateActiveTextureCache()
 
       if ns.Textures and ns.Textures.ShowTexture then
@@ -1500,6 +1575,11 @@ function ns.API.SelectBuffForTexture(buffInfo, textureNumber)
   cfg.tracking.cooldownID = buffInfo.cooldownID
   cfg.tracking.slotNumber = buffInfo.slotNumber
   cfg.tracking.enabled = true
+  -- Bake the entry's tracking type when it carries one (custom Add-by-ID
+  -- entries do); otherwise the setup panel's Type dropdown forces the choice.
+  if buffInfo.trackType and buffInfo.trackType ~= "" then
+    cfg.tracking.trackType = buffInfo.trackType
+  end
   ns.API.InvalidateActiveTextureCache()
 
   if ns.Textures and ns.Textures.UpdateTexture then
@@ -1541,6 +1621,14 @@ function ns.API.InitializeNewBar()
       db.bars[i].tracking.buffName = "(Not configured yet)"
       db.bars[i].tracking.spellID = 0
       db.bars[i].tracking.maxStacks = 10
+      -- SLOT REUSE HYGIENE (2026-08-30): a slot freed by an OLD build's delete
+      -- can still carry custom-aura fields; without this the "new" bar
+      -- inherited the deleted custom bar's identity (catalog resurrection).
+      db.bars[i].tracking.customAura = nil
+      db.bars[i].tracking.trackedSpellID = nil
+      db.bars[i].tracking.displaySpellID = nil
+      db.bars[i].tracking.auraUnits = nil
+      db.bars[i].tracking.auraOwnOnly = nil
       ns.API.InvalidateActiveBarCache()
       
       if ns.Display and ns.Display.ShowBar then
@@ -1830,6 +1918,9 @@ function ns.API.ApplyGlobalFontTexture(font, texture)
   if db.focusCastbar then
     ApplyFontTextureToTable(db.focusCastbar, font, texture)
   end
+  if db.targetCastbar then
+    ApplyFontTextureToTable(db.targetCastbar, font, texture)
+  end
 
   -- Refresh visuals
   if ns.Display and ns.Display.ApplyAllBars then ns.Display.ApplyAllBars() end
@@ -1848,6 +1939,7 @@ function ns.API.ApplyGlobalFontTexture(font, texture)
   end
   if ns.Castbar and ns.Castbar.ApplyAppearance then ns.Castbar.ApplyAppearance() end
   if ns.FocusCastbar and ns.FocusCastbar.ApplyAppearance then ns.FocusCastbar.ApplyAppearance() end
+  if ns.TargetCastbar and ns.TargetCastbar.ApplyAppearance then ns.TargetCastbar.ApplyAppearance() end
 
   -- CDM icon groups: cooldown text + charge/stack text global defaults,
   -- overwriting any per-icon font override too, plus custom labels and
@@ -1883,6 +1975,82 @@ function ns.API.ApplyGlobalFontTexture(font, texture)
 
   local reg = LibStub and LibStub("AceConfigRegistry-3.0", true)
   if reg then reg:NotifyChange("ArcUI") end
+end
+
+-- ===================================================================
+-- NATURAL FILL ("Use Texture Colors")
+--
+-- Bar textures are TINTED by StatusBar:SetStatusBarColor and by the fill
+-- texture's own SetVertexColor -- both multiply the art, so white (1,1,1) is
+-- the identity that lets a texture's own colors show through.
+--
+-- Every bar module writes that tint from many paths (base color, threshold
+-- colors, color curves, per-slot colors, gradients, engine overlays), so the
+-- toggle is enforced at the WIDGET rather than at each writer: one hook per
+-- StatusBar rewrites any non-white tint back to white. Same single-writer
+-- authority pattern the CDM modules use for alpha/desaturation. Recursion is
+-- self-limiting -- the corrective call is white, which passes the guard.
+-- ===================================================================
+
+-- Is the natural-fill toggle on for this bar's display config?
+function ns.API.IsNaturalFill(displayCfg)
+  return displayCfg ~= nil and displayCfg.useTextureColor == true
+end
+
+-- Hook the CURRENT fill texture. Re-called after every SetStatusBarTexture:
+-- a texture swap can hand back a different object, and the fresh one carries
+-- no hook (the flag lives on the object, so re-hooking is idempotent).
+local function HookNaturalFillTexture(statusBar)
+  local tex = statusBar.GetStatusBarTexture and statusBar:GetStatusBarTexture()
+  if not tex or not tex.SetVertexColor or tex._arcNaturalTexHooked then return tex end
+  tex._arcNaturalTexHooked = true
+  tex._arcNaturalOwner = statusBar
+  hooksecurefunc(tex, "SetVertexColor", function(self, r, g, b, a)
+    local owner = self._arcNaturalOwner
+    if not (owner and owner._arcNaturalFill) then return end
+    -- guard the compare: engine-driven bars can hand us secret values
+    if issecretvalue and (issecretvalue(r) or issecretvalue(g) or issecretvalue(b)) then return end
+    if r ~= 1 or g ~= 1 or b ~= 1 then
+      self:SetVertexColor(1, 1, 1, a or 1)
+    end
+  end)
+  return tex
+end
+
+-- enabled = true  -> the bar renders its texture's own colors
+-- enabled = false -> release; the caller's next appearance pass repaints
+function ns.API.SetNaturalFill(statusBar, enabled)
+  if not statusBar or not statusBar.SetStatusBarColor then return end
+
+  if not enabled then
+    statusBar._arcNaturalFill = nil
+    return
+  end
+
+  if not statusBar._arcNaturalFillHooked then
+    statusBar._arcNaturalFillHooked = true
+    hooksecurefunc(statusBar, "SetStatusBarColor", function(self, r, g, b, a)
+      if not self._arcNaturalFill then return end
+      if issecretvalue and (issecretvalue(r) or issecretvalue(g) or issecretvalue(b)) then return end
+      if r ~= 1 or g ~= 1 or b ~= 1 then
+        self:SetStatusBarColor(1, 1, 1, a or 1)
+      end
+    end)
+    if statusBar.SetStatusBarTexture then
+      hooksecurefunc(statusBar, "SetStatusBarTexture", function(self)
+        if not self._arcNaturalFill then return end
+        local t = HookNaturalFillTexture(self)
+        if t and t.SetVertexColor then t:SetVertexColor(1, 1, 1, 1) end
+        self:SetStatusBarColor(1, 1, 1, 1)
+      end)
+    end
+  end
+
+  statusBar._arcNaturalFill = true
+  HookNaturalFillTexture(statusBar)
+  statusBar:SetStatusBarColor(1, 1, 1, 1)
+  local tex = statusBar.GetStatusBarTexture and statusBar:GetStatusBarTexture()
+  if tex and tex.SetVertexColor then tex:SetVertexColor(1, 1, 1, 1) end
 end
 
 -- ===================================================================
