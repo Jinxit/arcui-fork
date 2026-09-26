@@ -64,9 +64,11 @@ CI workflows that need wowless should pull `ghcr.io/jinxit/agents-runner-wowless
 
 The syncer agent checks upstream via the CurseForge public API:
 ```
-GET https://www.curseforge.com/api/v1/mods/1391614/files?pageSize=1
+GET https://www.curseforge.com/api/v1/mods/1391614/files?pageSize=50&pageIndex=0
 ```
-Project ID `1391614` is ArcUI. The response is JSON with the latest file's `displayName` (e.g. `ArcUI-3.7.0.zip`) and `id` (used to construct the download URL). Current version is read from `## Version:` in `ArcUI.toc`. If the CurseForge API fails, the run aborts — no fallback.
+Project ID `1391614` is ArcUI. CurseForge mixes Retail and Classic Era releases in this listing. The syncer scans newest-first, paginating with zero-based `pageIndex`, and selects the first file whose `gameVersionTypeIds` contains Retail type ID `517`. Classic Era `*-forever` releases currently use type ID `88568` and must never be imported into this fork.
+
+The version is parsed from the selected file's `fileName` (for example, `ArcUI-3.9.0.zip`); `displayName` normally omits the `.zip` suffix. The file's `id` constructs the download URL. Current version is read from `## Version:` in `ArcUI.toc`. If the API fails, its response shape changes, or no valid Retail file is found, the run aborts without falling back to another source.
 
 ## CI
 
